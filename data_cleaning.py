@@ -8,7 +8,7 @@ from collections import Counter
 
 
 def remove_row_h5(dset, row_idx):
-    dset[row_idx : -1] = dset[row_idx + 1 :]
+    dset[row_idx - 1 : -1] = dset[row_idx :]
 
     dset.resize(dset.shape[0] - 1, axis=0)
 
@@ -20,6 +20,8 @@ entries_to_delete = []
 cleaned_dsets = []
 
 for split in ['train', 'val', 'test']:
+
+    deleted = 0
 
     filename = 'to_delete_' + split + '.txt'
     print(f'Opening file {filename}')
@@ -40,8 +42,9 @@ for split in ['train', 'val', 'test']:
                 for entry in entries_to_delete:
                     try:
                         entry = int(entry)
-                    except:
+                    except: # in this case, the entry will be text we can ignore
                         continue  
-                    remove_row_h5(dset, entry)
+                    remove_row_h5(dset, entry - deleted)
+                    deleted += 1
 
         

@@ -39,6 +39,7 @@ for split in ['train', 'val', 'test']:
                 crop_path = os.path.join(CROP_DIR, crop_folder, crop_name)
                 
                 if img_name == '3258':
+                    x = 0
                     pass
 
                 class_name = obj_label[objects[j]]
