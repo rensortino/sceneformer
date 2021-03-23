@@ -31,8 +31,6 @@ for split in ['train', 'val', 'test']:
 
     filename = 'to_delete_' + split + '.txt'
     print(f'Creating or opening file {filename}')
-    with open(filename, 'a') as f:
-        f.write(f'{split}:\n')
 
     image_idx_to_features = []
 

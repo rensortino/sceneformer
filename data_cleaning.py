@@ -21,13 +21,13 @@ cleaned_dsets = []
 
 for split in ['train', 'val', 'test']:
 
-    deleted = 0
-
     filename = 'to_delete_' + split + '.txt'
     print(f'Opening file {filename}')
     with open(filename, 'r') as f:
         for line in f.readlines():
-            entries_to_delete.append(line)
+            entry_idx = line.split('\t')[0]
+            entry_idx = int(entry_idx)
+            entries_to_delete.append(entry_idx)
 
     with h5py.File('data/' + split + '.h5', "r") as h5_file:
 
@@ -39,12 +39,5 @@ for split in ['train', 'val', 'test']:
 
                 dset = cloned_file[k]
 
-                for entry in entries_to_delete:
-                    try:
-                        entry = int(entry)
-                    except: # in this case, the entry will be text we can ignore
-                        continue  
-                    remove_row_h5(dset, entry - deleted)
-                    deleted += 1
-
-        
+                for i, entry in enumerate(entries_to_delete):
+                    remove_row_h5(dset, entry - i)
