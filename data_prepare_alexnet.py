@@ -16,7 +16,7 @@ for split in ['train', 'val', 'test']:
 
     os.makedirs(split_dir, exist_ok=True)
 
-    with h5py.File('data/' + split + '_clone.h5', "a") as h5_file:
+    with h5py.File('data/' + split + '_clone.h5', "r") as h5_file:
 
         for k, v in h5_file.items():
             if k == 'image_paths':
@@ -37,10 +37,6 @@ for split in ['train', 'val', 'test']:
                 crop_folder = path.split('\\')[0]
                 crop_name = f'{img_name}_{j}.{extension}'
                 crop_path = os.path.join(CROP_DIR, crop_folder, crop_name)
-                
-                if img_name == '3258':
-                    x = 0
-                    pass
 
                 class_name = obj_label[objects[j]]
 

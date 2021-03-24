@@ -8,7 +8,7 @@ from collections import Counter
 
 
 def remove_row_h5(dset, row_idx):
-    dset[row_idx - 1 : -1] = dset[row_idx :]
+    dset[row_idx : -1] = dset[row_idx + 1 :]
 
     dset.resize(dset.shape[0] - 1, axis=0)
 
@@ -20,7 +20,7 @@ entries_to_delete = []
 cleaned_dsets = []
 
 for split in ['train', 'val', 'test']:
-
+    
     filename = 'to_delete_' + split + '.txt'
     print(f'Opening file {filename}')
     with open(filename, 'r') as f:
@@ -32,6 +32,9 @@ for split in ['train', 'val', 'test']:
     with h5py.File('data/' + split + '.h5', "r") as h5_file:
 
         for k,v in h5_file.items():
+
+            if k == 'image_paths':
+                d = 0
 
             with h5py.File('data/' + split + '_clone.h5', "a") as cloned_file:
 
