@@ -129,8 +129,11 @@ dmypy.json
 # Pyre type checker
 .pyre/
 
-
+# Useless folders
 .vscode/
 data/
-*.txt
 images/
+
+# Useless files
+*.txt
+*.pth*
