@@ -121,42 +121,6 @@ def initialize_model(model_name, num_classes, feature_extract, use_pretrained=Tr
         model_ft.fc = nn.Linear(num_ftrs, num_classes)
         input_size = 224
 
-    elif model_name == "alexnet":
-        """ Alexnet
-        """
-        model_ft = models.alexnet(pretrained=use_pretrained)
-        set_parameter_requires_grad(model_ft, feature_extract)
-        num_ftrs = model_ft.classifier[6].in_features
-        model_ft.classifier[6] = nn.Linear(num_ftrs,num_classes)
-        input_size = 224
-
-    elif model_name == "vgg":
-        """ VGG11_bn
-        """
-        model_ft = models.vgg11_bn(pretrained=use_pretrained)
-        set_parameter_requires_grad(model_ft, feature_extract)
-        num_ftrs = model_ft.classifier[6].in_features
-        model_ft.classifier[6] = nn.Linear(num_ftrs,num_classes)
-        input_size = 224
-
-    elif model_name == "squeezenet":
-        """ Squeezenet
-        """
-        model_ft = models.squeezenet1_0(pretrained=use_pretrained)
-        set_parameter_requires_grad(model_ft, feature_extract)
-        model_ft.classifier[1] = nn.Conv2d(512, num_classes, kernel_size=(1,1), stride=(1,1))
-        model_ft.num_classes = num_classes
-        input_size = 224
-
-    elif model_name == "densenet":
-        """ Densenet
-        """
-        model_ft = models.densenet121(pretrained=use_pretrained)
-        set_parameter_requires_grad(model_ft, feature_extract)
-        num_ftrs = model_ft.classifier.in_features
-        model_ft.classifier = nn.Linear(num_ftrs, num_classes) 
-        input_size = 224
-
     elif model_name == "inception":
         """ Inception v3 
         Be careful, expects (299,299) sized images and has auxiliary output
@@ -203,11 +167,6 @@ def main():
     # Initialize the model for this run
     model_ft, input_size = initialize_model(model_name, num_classes, feature_extract, use_pretrained=True)
 
-    # Print the model we just instantiated
-    print(model_ft)
-
-    # Data augmentation and normalization for training
-    # Just normalization for validation
     data_transforms = {
         'train': transforms.Compose([
             transforms.RandomResizedCrop(input_size),
@@ -238,8 +197,6 @@ def main():
     # Create training and validation dataloaders
     dataloaders_dict = {x: torch.utils.data.DataLoader(image_datasets[x], batch_size=batch_size, shuffle=True, num_workers=4) for x in ['train', 'val', 'test']}
 
-
-
     # Send the model to GPU
     model_ft = model_ft.to(device)
 
@@ -269,32 +226,6 @@ def main():
 
     # Train and evaluate
     model_ft, hist = train_model(model_ft, dataloaders_dict, criterion, optimizer_ft, num_epochs=num_epochs, is_inception=(model_name=="inception"))
-
-    # Initialize the non-pretrained version of the model used for this run
-    # scratch_model,_ = initialize_model(model_name, num_classes, feature_extract=False, use_pretrained=False)
-    # scratch_model = scratch_model.to(device)
-    # scratch_optimizer = optim.SGD(scratch_model.parameters(), lr=0.001, momentum=0.9)
-    # scratch_criterion = nn.CrossEntropyLoss()
-    # _,scratch_hist = train_model(scratch_model, dataloaders_dict, scratch_criterion, scratch_optimizer, num_epochs=num_epochs, is_inception=(model_name=="inception"))
-
-    # Plot the training curves of validation accuracy vs. number 
-    #  of training epochs for the transfer learning method and
-    #  the model trained from scratch
-    ohist = []
-    shist = []
-
-    ohist = [h.cpu().numpy() for h in hist]
-    shist = [h.cpu().numpy() for h in scratch_hist]
-
-    plt.title("Validation Accuracy vs. Number of Training Epochs")
-    plt.xlabel("Training Epochs")
-    plt.ylabel("Validation Accuracy")
-    plt.plot(range(1,num_epochs+1),ohist,label="Pretrained")
-    plt.plot(range(1,num_epochs+1),shist,label="Scratch")
-    plt.ylim((0,1.))
-    plt.xticks(np.arange(1, num_epochs+1, 1.0))
-    plt.legend()
-    plt.show()
 
 if __name__ == '__main__':
     main()
