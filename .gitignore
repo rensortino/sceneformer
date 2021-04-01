@@ -137,3 +137,4 @@ images/
 # Useless files
 *.txt
 *.pth*
+ckpt/
