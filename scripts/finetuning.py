@@ -14,7 +14,7 @@ import copy
 
 # Detect if we have a GPU available
 device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
-save_path = 'ckpt/best_model.pth'
+save_dir = 'ckpt'
 
 def train_model(model, dataloaders, criterion, optimizer, num_epochs=25, is_inception=False):
     since = time.time()
@@ -86,6 +86,7 @@ def train_model(model, dataloaders, criterion, optimizer, num_epochs=25, is_ince
             # deep copy the model
             if phase == 'val' and epoch_acc > best_acc:
                 best_acc = epoch_acc
+                save_path = os.path.join(save_dir, f'{model.name}_best.pt')
                 print(f'Saving model in {save_path}')
                 torch.save(model.state_dict(), save_path)
             if phase == 'val':
@@ -198,6 +199,8 @@ def main():
 
     # Send the model to GPU
     model_ft = model_ft.to(device)
+
+    model_ft.name = model_name
 
     # Gather the parameters to be optimized/updated in this run. If we are
     #  finetuning we will be updating all parameters. However, if we are 

@@ -30,12 +30,10 @@ class Logging(Callback):
         print('trainer is init now')
 
     def on_epoch_end(self, trainer, pl_module):
-        #trainer.logger.experiment.add_scalar("Loss/Train", trainer.cur_loss, trainer.epoch)
         train_loss_mean = np.mean(pl_module.training_losses)
-        self.log('pl_logger_train_loss', pl_module.current_loss)
+        self.log('pl_logger_train_loss', pl_module.step_loss)
         trainer.logger.experiment.add_scalar('training_loss', train_loss_mean, global_step=pl_module.current_epoch)
         self.training_losses = []  # reset for next epoch
-        print('do something when training ends')
 
 class ResNet50(nn.Module):
     def __init__(self, w_path, num_classes=10):
@@ -48,15 +46,12 @@ class ResNet50(nn.Module):
         output = self.model(imgs)
         return output
 
-# Select device
-# dev = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 w_path = 'ckpt/best.pt'
 criterion = nn.KLDivLoss()
 lr = 0.01 # learning rate
 seq_len = 16
 bs = 4
 emb_size = 10
-feature_extractor = ResNet50(w_path).cuda()
 epochs = 30 # The number of epochs
 
 class MNISTDataModule(pl.LightningDataModule):
@@ -66,25 +61,18 @@ class MNISTDataModule(pl.LightningDataModule):
         x[x <= 0.5] = -1
         return x
 
-    def setup(self, stage):
+    def prepare_data(self):
         to_tensor = T.ToTensor()
         normalize = self.normalize_
-        extend_chans = T.Lambda(lambda x: x.repeat(3, 1, 1))
+        #extend_chans = T.Lambda(lambda x: x.repeat(3, 1, 1))
         self.transforms = T.Compose([to_tensor, normalize])
-
-    def prepare_data(self):
-        pass
-
-    def train_dataloader(self):
         train_dataset = datasets.MNIST(root="data", download=False, train=True, transform=self.transforms)
+        self.test_dataset = datasets.MNIST(root="data", download=False, train=False, transform=self.transforms)
 
         # Compute dataset sizes
         num_train = len(train_dataset)
         # List of indexes on the training set
         train_idx = list(range(num_train))
-        # Compute dataset sizes
-        num_train = len(train_dataset)
-        # Shuffle training set
         random.shuffle(train_idx)
 
         # Validation fraction
@@ -97,16 +85,17 @@ class MNISTDataModule(pl.LightningDataModule):
         train_idx = train_idx[:num_train]
 
         # Split train_dataset into training and validation
-        self.val_dataset = Subset(train_dataset, val_idx)
         self.train_dataset = Subset(train_dataset, train_idx)
+        self.val_dataset = Subset(train_dataset, val_idx)
+
+
+    def train_dataloader(self):
         return DataLoader(self.train_dataset, batch_size=64, num_workers=0, shuffle=True, drop_last=True)
 
     def val_dataloader(self):
         return DataLoader(self.val_dataset, batch_size=64, num_workers=0, shuffle=True, drop_last=True)
 
-
     def test_dataloader(self):
-        self.test_dataset = datasets.MNIST(root="data", download=False, train=False, transform=self.transforms)
         return DataLoader(self.test_dataset, batch_size=64, num_workers=0, shuffle=False, drop_last=True)
 
 class TransformerModel(pl.LightningModule):
@@ -125,6 +114,7 @@ class TransformerModel(pl.LightningModule):
         self.training_losses = []
 
         # self.init_weights()
+
 
     def configure_optimizers(self):
         optimizer = torch.optim.SGD(self.parameters(), lr=lr)
@@ -159,7 +149,7 @@ class TransformerModel(pl.LightningModule):
 
     def training_step(self, batch, batch_idx):
         images, labels = batch
-        targets = feature_extractor(images)
+        targets = self.feature_extractor(images)
         src_mask = self.generate_square_subsequent_mask(seq_len)
         output = self.forward(labels.unsqueeze(1), images, src_mask)
         step_loss = self.KLDivergence(output.view(-1, emb_size), targets)
@@ -169,8 +159,8 @@ class TransformerModel(pl.LightningModule):
         return step_loss
 
 def one_hot_encoder(labels, bs=64):
-    encoded_vector = torch.cat([torch.tensor([0,1,2,3,4,5,6,7,8,9]).unsqueeze(0)] * bs).cuda()
-    return torch.where(encoded_vector == labels, 1, 0)
+        encoded_vector = torch.cat([torch.tensor([0,1,2,3,4,5,6,7,8,9]).unsqueeze(0)] * bs).cuda()
+        return torch.where(encoded_vector == labels, 1, 0)
 
 
 def main():
