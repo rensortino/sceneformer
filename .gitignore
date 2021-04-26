@@ -139,3 +139,4 @@ images/
 *.txt
 *.pth*
 ckpt/
+wandb
