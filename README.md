@@ -1,4 +1,4 @@
-# sceneformer
+# You Tell, I Draw
 Transformer model for image generation from SceneGraphs
 
 ### preprocess.py
