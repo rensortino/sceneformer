@@ -9,7 +9,7 @@ class ResNet18(nn.Module):
         super(ResNet18, self).__init__()
         self.model = models.resnet18(num_classes=num_classes)
         self.model.conv1 = nn.Conv2d(1, 64, kernel_size=(7, 7), stride=(2, 2), padding=(3, 3), bias=False)
-        self.model.load_state_dict(torch.load(w_path)['model_state_dict'])
+        self.model.load_state_dict(torch.load(w_path))
         self.out_layer = self.model._modules.get('avgpool')
         self.embedding_size = self.model._modules.get('fc').in_features
         self.resize = T.Resize((224,224))
@@ -28,7 +28,8 @@ class ResNet18(nn.Module):
         #hook = self.out_layer.register_forward_hook(copy_data)
         hook = self.out_layer.register_forward_hook(copy_data)
         # Run the model on our transformed image
-        self.model(images.cuda())
+        with torch.no_grad():
+            self.model(images.cuda())
         # Detach our copy function from the layer
         hook.remove()
         # Return the feature vector

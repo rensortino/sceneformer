@@ -28,7 +28,7 @@ class Logging(Callback):
         #trainer.logger.experiment.log({"Reconstructed Image": [wandb.Image(np_image, caption="First of each batch")]})
         # self.log('pl_logger_train_loss', pl_module.step_loss)
         # trainer.logger.experiment.add_scalar('training_loss', train_loss_mean, global_step=pl_module.current_epoch)
-        pl_module.log('Epoch Elapsed Time', time.time() - self.start_time)
+        pl_module.logger.experiment.log({'Epoch Elapsed Time': time.time() - self.start_time})
 
 def show_image(img):
 
