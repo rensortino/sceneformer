@@ -12,13 +12,12 @@ class ResNet18(nn.Module):
         self.model.load_state_dict(torch.load(w_path))
         self.out_layer = self.model._modules.get('avgpool')
         self.embedding_size = self.model._modules.get('fc').in_features
-        self.resize = T.Resize((224,224))
 
-    def get_vectors(self, images, batch_size):
+    def get_vectors(self, images):
         self.model.eval()
         # Create a vector of zeros that will hold our feature vector
         # The 'avgpool' layer has an output size of 512
-        visual_embedding = torch.zeros(batch_size, self.embedding_size).cuda()
+        visual_embedding = torch.zeros(images.shape[0], self.embedding_size).cuda()
 
         # Define a function that will copy the output of a layer
         def copy_data(module, input, output):
@@ -36,7 +35,6 @@ class ResNet18(nn.Module):
         return visual_embedding
 
     def forward(self, imgs):
-        imgs = self.resize(imgs)
         output = self.model(imgs)
         return output
 

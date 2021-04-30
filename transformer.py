@@ -5,32 +5,9 @@ import torch
 from typing import Optional, Any
 import copy
 from torch import Tensor
-from feature_extractor import ResNet18
-from torchvision.utils import make_grid
 
 from torch.nn import TransformerEncoder, TransformerEncoderLayer
 from torch.nn import TransformerDecoder, TransformerDecoderLayer, ModuleList
-
-w_path = 'ckpt/resnet18_mnist.pt'
-
-hp = dict(
-        nhid = 200, # the dimension of the feedforward network model in nn.TransformerEncoder
-        nlayers = 8, # the number of nn.TransformerEncoderLayer in nn.TransformerEncoder
-        nheads = 8, # the number of heads in the multiheadattention models
-        dropout = 0.2, # the dropout value
-        noise_size = 100,
-        lr = 2.0,
-        seq_len = 4,
-        seq_bs = 16,
-        batch_size = 64,
-        w_path = 'ckpt/resnet18_mnist.pt',
-        emb_size = 512,
-        epochs = 30,
-        num_classes = 10,
-        img_h = 16,
-        img_w = 16,
-        log_every = 20,
-    )
 
 class PositionalEncoding(nn.Module):
 
@@ -127,10 +104,12 @@ class ImageDecoder(nn.TransformerDecoder):
             see the docs in Transformer class.
         """
         output = tgt
+        seq_len = tgt.shape[0]
+        seq_bs = tgt.shape[1]
 
         for mod in self.layers:
 
-            dec_out = mod(output.view(hp['seq_len'], hp['seq_bs'], -1), memory, tgt_mask=tgt_mask,
+            dec_out = mod(output, memory, tgt_mask=tgt_mask,
                          memory_mask=memory_mask,
                          tgt_key_padding_mask=tgt_key_padding_mask,
                          memory_key_padding_mask=memory_key_padding_mask)
@@ -138,7 +117,8 @@ class ImageDecoder(nn.TransformerDecoder):
             out_img = self.img_gen(dec_out)
 
             with torch.no_grad():
-                output = self.feature_extractor.get_vectors(out_img, out_img.size(0))
+                output = self.feature_extractor.get_vectors(out_img)
+                output = output.view(seq_len, seq_bs, -1)
 
         if self.norm is not None:
             output = self.norm(output)
@@ -146,29 +126,39 @@ class ImageDecoder(nn.TransformerDecoder):
         return out_img
 
 class Transformer(nn.Module):
-    def __init__(self, emb_size, batch_size, seq_len, device='cpu', img_size=(32,32), nhead=3, nhid=256, nlayers=3, dropout=0.5, num_classes=10):
+    def __init__(self,
+                feature_extractor,
+                emb_size=512,
+                batch_size=16,
+                seq_len=4,
+                nhead=3,
+                nhid=256,
+                nlayers=3,
+                dropout=0.5,
+                num_classes=10,
+                img_size=(32,32),
+                device='cpu',
+            ):
         super(Transformer, self).__init__()
         
         self.emb_size = emb_size
-        #self.hp = hp
         self.batch_size = batch_size
         self.seq_len = seq_len
         self.img_size = img_size
         self.device = device
         self.pe = PositionalEncoding(emb_size, dropout)
         self.embedding = nn.Embedding(num_classes, emb_size)
-        self.feature_extractor = ResNet18(hp['w_path']).cuda()
         # Encoder
         encoder_layers = TransformerEncoderLayer(emb_size, nhead, nhid, dropout)
         self.encoder = TransformerEncoder(encoder_layers, nlayers)
         # Decoder
         decoder_layers = TransformerDecoderLayer(emb_size, nhead, nhid, dropout)
-        self.decoder = ImageDecoder(self.feature_extractor, emb_size, decoder_layers, nlayers, img_size)
+        self.decoder = ImageDecoder(feature_extractor, emb_size, decoder_layers, nlayers, img_size)
 
         # self.init_weights()
 
     def generate_square_subsequent_mask(self, sz):
-        mask = (torch.triu(torch.ones(sz, sz)) == 1).transpose(0, 1)
+        mask = (torch.triu(torch.ones(sz, sz, device=self.device)) == 1).transpose(0, 1)
         mask = mask.float().masked_fill(mask == 0, float('-inf')).masked_fill(mask == 1, float(0.0))
         return mask
 
@@ -178,47 +168,15 @@ class Transformer(nn.Module):
         self.decoder.bias.data.zero_()
         self.decoder.weight.data.uniform_(-initrange, initrange)
 
-    def get_img_grids(self, img_seq):
-        '''
-        img_ seq = [seq_len, h, w] = [4, 16, 16]
-        '''
-        img_seq = img_seq.unsqueeze(1) # Restore Channel dim
-        seq_len, c, h, w = img_seq.shape
-        grid = torch.zeros(seq_len, c, h, w, device=self.device)
-        img_grids = []
-        for i, img in enumerate(img_seq):
-            # Place the image in the right quadrant
-            grid[i] = img
-            # Construct the grid from the batch of images
-            img_grid = make_grid(grid.cpu(), nrow=2, padding=0)
-            # Take the first channel (Grayscale images, the channels are all the same)
-            img_grids.append(img_grid[0].unsqueeze(0).unsqueeze(0)) # Restore channel and batch dimensions
-            #img_embedding = self.feature_extractor.get_vectors(img_grid[0], hp['batch_size'])
-            #img_embeddings.append(img_embedding.unsqueeze(0)) # Unsqueeze to cat along dim 0 later
-        return torch.cat(img_grids)
-
-    def get_targets(self, images):
-        img_h, img_w = images.shape[2:]
-        images = images.view(self.seq_len, self.batch_size, img_h, img_w)
-        images = images.permute(1,0,2,3) # transpose axes to allow iterating through sequences
-        img_grids = [self.get_img_grids(img_seq) for img_seq in images]
-        #targets = list(map(lambda x: x.unsqueeze(0), targets))
-        target_imgs = torch.cat(img_grids).to(self.device)
-        with torch.no_grad():
-            targets = self.feature_extractor.get_vectors(target_imgs, target_imgs.shape[0])
-        return targets, target_imgs
-
-    def forward(self, in_seq, images, out_seq, src_mask=None, tgt_mask=None):
-        seq_len = self.seq_len
-        bs = self.batch_size
-        #targets = self.feature_extractor.get_vectors(images).view(hp['seq_len'], hp['t_bs'], -1)
-        src_mask = self.generate_square_subsequent_mask(seq_len)
-        obj_emb = self.embedding(in_seq.view(seq_len, bs)) * math.sqrt(self.emb_size)
+    def forward(self, in_seq, out_seq, src_mask=None, tgt_mask=None):
+        # input should be three-dimensional (Seq_len, N_batchs, Embedding)
+        src_mask = self.generate_square_subsequent_mask(self.seq_len)
+        obj_emb = self.embedding(in_seq.view(self.seq_len, self.batch_size)) * math.sqrt(self.emb_size)
         obj_emb = self.pe(obj_emb)
         # Run encoder forward
         enc_out = self.encoder(obj_emb)
         # extract image embeddings and reshape for decoder input
         # Run decoder forward
-        out_img = self.decoder(out_seq.reshape(seq_len, bs, -1).cuda(), enc_out)
+        out_img = self.decoder(out_seq.cuda(), enc_out, src_mask)
 
         return out_img

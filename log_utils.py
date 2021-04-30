@@ -1,13 +1,13 @@
-import torch
 import time
-import pytorch_lightning as pl
+import random
+import numpy as np
+import matplotlib.pyplot as plt
+import torch
 import torchvision.transforms as T
 from pytorch_lightning.callbacks import Callback
 from torchvision.utils import make_grid
 import wandb
-import numpy as np
-import random
-import matplotlib.pyplot as plt
+
 
 
 
@@ -42,11 +42,11 @@ def show_image(img):
     if type(img) == torch.Tensor:
         img = img.cpu().detach()
         
-    plt.imshow(np.transpose(img.numpy(), (1,2,0)), interpolation='nearest')
+    plt.imshow(np.transpose(img.numpy(), (1,2,0)), cmap="gray", interpolation='nearest')
     plt.show()
 
 
-def log_prediction(gt, pred, logger, nrow=4, title : str = "Logged Image"):
+def log_prediction(gt, pred, logger, nrow=16, title : str = "Logged Image"):
     # h, w = hp['img_h'], hp['img_w']
 
     # gt = gt.view(hp['seq_len'] * hp['t_bs'], 1, h * int(math.sqrt(hp['seq_len'])), w * int(math.sqrt(hp['seq_len']))) # Reshape to [B,C,H,W]
@@ -55,10 +55,20 @@ def log_prediction(gt, pred, logger, nrow=4, title : str = "Logged Image"):
     resize = T.Resize((64,64))
     gt = resize(gt)
     pred = resize(pred)
-    gt_grid = make_grid(gt.cpu(), nrow=nrow, padding=0)
-    p_grid = make_grid(pred.cpu(), nrow=nrow, padding=0)
+    gt_grid = make_grid(gt.cpu(), nrow=nrow, padding=16)
+    p_grid = make_grid(pred.cpu(), nrow=nrow, padding=16)
 
     logger.experiment.log({title :[
-        wandb.Image(p_grid.cpu(), caption="Prediction"),
-        wandb.Image(gt_grid.cpu(), caption="Ground Truth"), 
+        wandb.Image(p_grid, caption="Prediction"),
+        wandb.Image(gt_grid, caption="Ground Truth"),
     ]})
+
+
+
+def convert_weights_pl_to_pt(w_path, out_path):
+    state_dict = torch.load('ckpt/resnet18_mnist_unformatted.pt')['state_dict']
+    new_sd = {}
+    for k in state_dict.keys():
+        new_k = k[6:] #strip the model string
+        new_sd[new_k] = state_dict[k]
+    torch.save(new_sd, 'resnet18_mnist.pt')

@@ -3,48 +3,56 @@ import torch
 from log_utils import Logging, show_image, log_prediction
 from transformer import Transformer
 import json
-
+from attrdict import AttrDict
+from torchvision.utils import make_grid
 from torchvision import datasets
 import torchvision.transforms as T
 from torch.utils.data import DataLoader, random_split
+from feature_extractor import ResNet18
 
 import pytorch_lightning as pl
-from pytorch_lightning.loggers import WandbLogger# TensorBoardLogger
-#from pl_bolts.callbacks import TensorboardGenerativeModelImageSampler
+from pytorch_lightning.loggers import WandbLogger
 
 import wandb
 
 from cgan import weights_init, DCGANGenerator, DCGANDiscriminator
 
-w_path = 'ckpt/resnet18_mnist.pt'
-emb_size = 512
-epochs = 50
-num_classes = 10
-img_h = 16
-img_w = 16
-log_every = 20
+# TODO Implement target shifting + masking
 
+def get_img_grids(img_seq):
+    '''
+    img_ seq = [seq_len, h, w] = [4, 16, 16]
+    '''
+    img_seq = img_seq.unsqueeze(1) # Restore Channel dim
+    seq_len, c, h, w = img_seq.shape
+    grid = torch.zeros(seq_len, c, h, w, device=img_seq.device)
+    img_grids = []
+    for i, img in enumerate(img_seq):
+        # Place the image in the right quadrant
+        grid[i] = img
+        # Construct the grid from the batch of images
+        img_grid = make_grid(grid.cpu(), nrow=2, padding=0)
+        # Take the first channel (Grayscale images, the channels are all the same)
+        img_grids.append(img_grid[0].unsqueeze(0).unsqueeze(0)) # Restore channel and batch dimensions
+    return torch.cat(img_grids)
 
+def get_targets(feature_extractor, images, n_channels=1):
+    
+    '''
+    images shape: [seq_len, seq_batch, h, w]
+    '''
+    seq_len = images.shape[0]
+    seq_bs = images.shape[1]
 
-# TODO Change hp values to argparse
+    # Iterate over sequences
+    img_grids = [get_img_grids(images[:,i,:,:]) for i in range(images.shape[1])]
 
-hp = dict(
-        nhid = 2048, # the dimension of the feedforward network model in nn.TransformerEncoder
-        nlayers = 12, # the number of nn.TransformerEncoderLayer in nn.TransformerEncowandder
-        nheads = 8, # the number of heads in the multiheadattention models
-        dropout = 0.5, # the dropout value
-        lr = 1e-3,
-        seq_len = 4,
-        seq_bs = 16,
-        img_bs = 64,
-        emb_size = 512,
-        img_h = 16,
-        img_w = 16,
-        log_every = 20,
-    )
-
-assert emb_size % hp['nheads'] == 0, "Embedding size not divisible by number of heads"
-assert hp['img_bs'] == hp['seq_len'] * hp['seq_bs'], "Batch size is not seq_len * transformer_batch"
+    tgt_images = torch.cat(img_grids, dim=1).to(images.device)
+    tgt_images = tgt_images.view(seq_len * seq_bs, n_channels, tgt_images.shape[2], tgt_images.shape[3])
+    with torch.no_grad():
+        tgt_vectors = feature_extractor.get_vectors(tgt_images)
+    tgt_vectors = tgt_vectors.view(seq_len, seq_bs, -1)
+    return tgt_vectors, tgt_images
 
 class MNISTDataModule(pl.LightningDataModule):
 
@@ -58,7 +66,11 @@ class MNISTDataModule(pl.LightningDataModule):
 
     def setup(self, stage=None):
         mnist = datasets.MNIST(download=False, train=True, root="data").data.float()
-        self.transforms = T.Compose([ T.Resize((img_h, img_w)), T.ToTensor(), T.Normalize((mnist.mean()/255,), (mnist.std()/255,))])
+        self.transforms = T.Compose([ 
+            T.Resize((args.data_loader.img_h, args.data_loader.img_w)), 
+            T.ToTensor(), 
+            T.Normalize((mnist.mean()/255,), (mnist.std()/255,))
+        ])
 
         # Assign train/val datasets for use in dataloaders
         if stage == 'fit' or stage is None:
@@ -70,46 +82,60 @@ class MNISTDataModule(pl.LightningDataModule):
             self.test_dataset = datasets.MNIST(self.data_dir, train=False, transform=self.transforms)
 
     def train_dataloader(self):
-        return DataLoader(self.train_dataset, batch_size=hp['img_bs'], num_workers=0, shuffle=True, drop_last=True, pin_memory=True)
+        return DataLoader(self.train_dataset, batch_size=args.data_loader.batch_size, num_workers=0, shuffle=True, drop_last=True, pin_memory=True)
 
     def val_dataloader(self):
-        return DataLoader(self.val_dataset, batch_size=hp['img_bs'], num_workers=0, shuffle=False, drop_last=True, pin_memory=True)
+        return DataLoader(self.val_dataset, batch_size=args.data_loader.batch_size, num_workers=0, shuffle=False, drop_last=True, pin_memory=True)
 
     def test_dataloader(self):
-        return DataLoader(self.test_dataset, batch_size=hp['img_bs'], num_workers=0, shuffle=False, drop_last=True, pin_memory=True)
+        return DataLoader(self.test_dataset, batch_size=args.data_loader.batch_size, num_workers=0, shuffle=False, drop_last=True, pin_memory=True)
 
 class Sceneformer(pl.LightningModule):
     
-    def __init__(self, device, emb_size: int = 512):
+    def __init__(self, feature_extractor, args, device):
         super(Sceneformer, self).__init__()
         self.dev = device
+        self.feature_extractor = feature_extractor
         # Variables for logging
         self.train_step = 1
         self.val_step = 1
+        self.args = args
         
         # Transformer
-        image_size = (img_w * int(math.sqrt(hp['seq_len'])), img_h * int(math.sqrt(hp['seq_len'])))
-        self.transformer = Transformer(emb_size, hp['seq_bs'], hp['seq_len'], self.dev, image_size, hp['nheads'], hp['nhid'], hp['nlayers'], hp['dropout'], num_classes)
+        image_size = (args.data_loader.img_w * int(math.sqrt(args.model.seq_len)), args.data_loader.img_h * int(math.sqrt(args.model.seq_len)))
+        self.transformer = Transformer(
+            feature_extractor,
+            args.model.emb_size,
+            args.model.seq_bs,
+            args.model.seq_len,
+            args.model.n_heads,
+            args.model.ff_dim,
+            args.model.n_layers,
+            args.model.dropout,
+            args.model.num_classes,
+            image_size,
+            self.dev)
         
         # self.disc = DCGANDiscriminator(image_channels=1).cuda()
         # self.disc.apply(weights_init)
 
         # self.init_weights()
 
-    def forward(self, labels, images, targets, src_mask=None, tgt_mask=None):
+    def forward(self, labels, targets, src_mask=None, tgt_mask=None):
         
-        return self.transformer(labels, images, targets)
+        return self.transformer(labels, targets)
 
     def training_step(self, batch, batch_idx):#, optimizer_idx):
 
         # Data loading
         images, labels = batch
+        images = images.view(args.model.seq_len, args.model.seq_bs, args.data_loader.img_h, args.data_loader.img_w)
         # Model forward
         step_loss, predictions, target_imgs = self.transformer_step(labels, images)
         # Logging
         self.logger.experiment.log({'Train t_loss with custom step': step_loss, 'train_step': self.train_step})
         self.train_step += 1
-        if self.global_step % log_every == 0:
+        if self.global_step % args.trainer.log_every_n_steps == 0:
             log_prediction(target_imgs, predictions, self.logger, title="Train Transformer Target and Ouptut")
 
         return step_loss
@@ -122,47 +148,54 @@ class Sceneformer(pl.LightningModule):
 
     def validation_step(self, batch, batch_idx):
         images, labels = batch
-        step_loss, predictions, targets = self.transformer_step(labels, images)
+        images = images.view(args.model.seq_len, args.model.seq_bs, args.data_loader.img_h, args.data_loader.img_w)
+        step_loss, predictions, target_imgs = self.transformer_step(labels, images)
         
         # Logging
         self.logger.experiment.log({'Val t_loss': step_loss, 'val_step': self.val_step})
         self.val_step += 1
-        #self.log_prediction(targets, predictions, self.logger, "Validation Transformer Target and Ouptut")
+        if self.global_step % args.trainer.log_every_n_steps == 0:
+            log_prediction(target_imgs, predictions, self.logger, title="Validation Transformer Target and Ouptut")
         return step_loss
 
     def test_step(self, batch, batch_idx):
         pass
 
     def configure_optimizers(self):
-        optimizer = torch.optim.Adam(self.parameters(), lr=hp['lr'])
+        optimizer = torch.optim.Adam(self.parameters(), lr=args.model.lr)
         scheduler = torch.optim.lr_scheduler.StepLR(optimizer, 1.0, gamma=0.95)
         return [optimizer], [scheduler]
 
     def transformer_loss(self, outputs, targets):
-        #loss = nn.KLDivLoss()
+        # loss = torch.nn.KLDivLoss()
         loss = torch.nn.MSELoss()
         return loss(outputs, targets)
 
     def transformer_step(self, labels, images):
 
-        targets, target_imgs = self.transformer.get_targets(images)
-        predictions = self(labels.unsqueeze(1), images, targets)
-        t_loss = self.transformer_loss(predictions, target_imgs)
-        return t_loss, predictions, target_imgs
+        '''
+        images shape:  [B,C,H,W]
+        '''
+        # Create target images
+        targets, tgt_imgs = get_targets(self.feature_extractor, images)
+        # Forward transformer
+        predictions = self(labels.unsqueeze(1), targets)
+        # Compute loss
+        t_loss = self.transformer_loss(predictions, tgt_imgs)
+        return t_loss, predictions, tgt_imgs
 
 def main(args):
-    print(args)
-    
-    # input should be three-dimensional (Seq_len, N_batchs, Embedding)
+
+    assert args.model.emb_size % args.model.n_heads == 0, "Embedding size not divisible by number of heads"
+    assert args.data_loader.batch_size == args.model.seq_len * args.model.seq_bs, "Batch size is not seq_len * transformer_batch"
 
     data_module = MNISTDataModule()
-    # tb_logger = TensorBoardLogger('tb_logs', name='mnist_transformer')
     wandb_logger = WandbLogger(project="MNIST Transformer")
     trainer = pl.Trainer(
         gpus=1,
         # fast_dev_run=True,
         # overfit_batches=0.01, # 1% of training set used as batch to make it overfit
-         limit_train_batches=0.05, # 10% of training data
+        limit_train_batches=0.1, # 10% of training data
         # limit_val_batches=0.1, # 10% of validation data
         num_sanity_val_steps=2,
         flush_logs_every_n_steps=20,
@@ -172,21 +205,20 @@ def main(args):
         logger=wandb_logger,
         callbacks=[
             Logging(),
-            #TensorboardGenerativeModelImageSampler()
         ]
     )
 
     wandb.login()
 
     hparams = dict(
-        nhid = hp['nhid'], # the dimension of the feedforward network model in nn.TransformerEncoder
-        nlayers = hp['nlayers'], # the number of nn.TransformerEncoderLayer in nn.TransformerEncowandder
-        nheads = hp['nheads'], # the number of heads in the multiheadattention models
-        dropout = hp['dropout'], # the dropout value
-        lr = hp['lr'],
-        emb_size = hp['emb_size'],
-        img_h = hp['img_h'],
-        img_w = hp['img_w'],
+        nhid = args.model.ff_dim, # the dimension of the feedforward network model in nn.TransformerEncoder
+        nlayers = args.model.n_layers, # the number of nn.TransformerEncoderLayer in nn.TransformerEncowandder
+        nheads = args.model.n_heads, # the number of heads in the multiheadattention models
+        dropout = args.model.dropout, # the dropout value
+        lr = args.model.lr,
+        emb_size = args.model.emb_size,
+        img_h = args.data_loader.img_h,
+        img_w = args.data_loader.img_w,
     )
 
     wandb.init(
@@ -194,19 +226,19 @@ def main(args):
         #mode="disabled"
     )
 
-    wandb.run.name = "Log Test"
+    wandb.run.name = "MSE Loss"
 
     config = wandb.config
 
     device = 'cuda:0' if args['n_gpu'] == 1 else 'cpu'
-
-    model = Sceneformer(device, emb_size)
+    
+    feature_extractor = ResNet18(args.model.fe_weights_path).cuda()
+    model = Sceneformer(feature_extractor, args, device)
 
     trainer.fit(model, data_module)
     
 if __name__ == '__main__':
     with open("config.json") as c:
+        args = AttrDict(json.load(c))
 
-        args = json.load(c)
     main(args)
-
