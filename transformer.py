@@ -103,6 +103,7 @@ class ImageDecoder(nn.TransformerDecoder):
         Shape:
             see the docs in Transformer class.
         """
+        #TODO Restore original decoder layer
         output = tgt
         seq_len = tgt.shape[0]
         seq_bs = tgt.shape[1]

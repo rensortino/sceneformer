@@ -12,6 +12,7 @@ class ResNet18(nn.Module):
         self.model.load_state_dict(torch.load(w_path))
         self.out_layer = self.model._modules.get('avgpool')
         self.embedding_size = self.model._modules.get('fc').in_features
+        # FIXME del self.model.fc ?
 
     def get_vectors(self, images):
         self.model.eval()

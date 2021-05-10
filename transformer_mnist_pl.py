@@ -1,8 +1,8 @@
 import math
+import json
 import torch
 from log_utils import Logging, show_image, log_prediction
 from transformer import Transformer
-import json
 from attrdict import AttrDict
 from torchvision.utils import make_grid
 from torchvision import datasets
@@ -18,6 +18,9 @@ import wandb
 from cgan import weights_init, DCGANGenerator, DCGANDiscriminator
 
 # TODO Implement target shifting + masking
+
+# TODO Input mask should zero attention where there is pad
+# Target mask should do this and also the triu mask
 
 def get_img_grids(img_seq):
     '''
