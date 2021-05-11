@@ -13,6 +13,7 @@
         "fe_weights_path": "ckpt/resnet18_mnist.pt",
         "num_classes": 10,
         "seq_len" : 4,
+        "max_seq_len": 6,
         "seq_bs" : 16
     },
     "data_loader": {

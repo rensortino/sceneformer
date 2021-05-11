@@ -43,7 +43,8 @@ def show_image(img):
         img = img.cpu().detach()
         
     plt.imshow(np.transpose(img.numpy(), (1,2,0)), cmap="gray", interpolation='nearest')
-    plt.show()
+    #plt.show()
+    return plt
 
 
 def log_prediction(gt, pred, logger, nrow=16, title : str = "Logged Image"):
@@ -58,10 +59,16 @@ def log_prediction(gt, pred, logger, nrow=16, title : str = "Logged Image"):
     gt_grid = make_grid(gt.cpu(), nrow=nrow, padding=16)
     p_grid = make_grid(pred.cpu(), nrow=nrow, padding=16)
 
-    logger.experiment.log({title :[
-        wandb.Image(p_grid, caption="Prediction"),
-        wandb.Image(gt_grid, caption="Ground Truth"),
-    ]})
+    wandb.log({title :[
+        wandb.Image(show_image(p_grid), caption="Matplotlib Pred"),
+        wandb.Image(show_image(gt_grid), caption="Matplotlib GT")
+]})
+
+
+    # wandb.log({title :[
+    #     wandb.Image(p_grid, caption="Prediction"),
+    #     wandb.Image(gt_grid, caption="Ground Truth"),
+    # ]})
 
 
 

@@ -9,55 +9,7 @@ from torch import Tensor
 from torch.nn import TransformerEncoder, TransformerEncoderLayer
 from torch.nn import TransformerDecoder, TransformerDecoderLayer, ModuleList
 
-class PositionalEncoding(nn.Module):
 
-    def __init__(self, d_model, dropout=0.1, max_len=5000):
-        super(PositionalEncoding, self).__init__()
-        self.dropout = nn.Dropout(p=dropout)
-
-        pe = torch.zeros(max_len, d_model)
-        position = torch.arange(0, max_len, dtype=torch.float).unsqueeze(1)
-        div_term = torch.exp(torch.arange(0, d_model, 2).float() * (-math.log(10000.0) / d_model))
-        pe[:, 0::2] = torch.sin(position * div_term)
-        pe[:, 1::2] = torch.cos(position * div_term)
-        pe = pe.unsqueeze(0).transpose(0, 1)
-        self.register_buffer('pe', pe)
-
-    def forward(self, x):
-        x = x + self.pe[:x.size(0), :]
-        return self.dropout(x)
-
-class ImageGenerator(nn.Module):
-    def __init__(self, img_size, emb_size=1024, ngf=128, channels=3):
-        super(ImageGenerator, self).__init__()
-
-        assert len(img_size) == 2, "img_size has to be a tuple (h, w)"
-
-        self.emb_size = emb_size
-        self.resize = T.Resize(img_size)
-
-        def block(in_feat, out_feat, kernel, stride, pad, last=False):
-            layers = [nn.ConvTranspose2d(in_feat, out_feat, kernel, stride, pad, bias=False)]
-            return layers
-
-        self.model = nn.Sequential(
-            *block(emb_size, ngf * 8, 4, 1, 0),
-            *block(ngf * 8, ngf * 4, 4, 2, 1),
-            *block(ngf * 4, ngf * 2, 4, 2, 1),
-            *block(ngf * 2, ngf, 4, 2, 1),
-            *block(ngf, ngf // 2, 4, 2, 1),
-            *block(ngf // 2, channels, 4, 2, 1, last=True)
-        ).cuda()
-
-        #self.model = nn.Sequential(
-        #    *block(emb_size, channels, 32, 1, 0),
-        #    #*block(ngf, channels, 4, 2, 1, last=True)
-        #).cuda()
-
-    def forward(self, x):
-        x = x.view(x.size(0) * x.size(1), self.emb_size, 1, 1)
-        x = self.model(x)
-        return self.resize(x)
 
 class ImageDecoder(nn.TransformerDecoder):
     r"""TransformerDecoder is a stack of N decoder layers
@@ -154,7 +106,7 @@ class Transformer(nn.Module):
         self.encoder = TransformerEncoder(encoder_layers, nlayers)
         # Decoder
         decoder_layers = TransformerDecoderLayer(emb_size, nhead, nhid, dropout)
-        self.decoder = ImageDecoder(feature_extractor, emb_size, decoder_layers, nlayers, img_size)
+        self.decoder = TransformerDecoder(decoder_layers, nlayers)
 
         # self.init_weights()
 
@@ -170,7 +122,14 @@ class Transformer(nn.Module):
         self.decoder.weight.data.uniform_(-initrange, initrange)
 
     def forward(self, in_seq, out_seq, src_mask=None, tgt_mask=None):
-        # input should be three-dimensional (Seq_len, N_batchs, Embedding)
+        '''
+        Args:
+        in_seq : (In_seq_len, N_batchs, Embedding)
+        out_seq : (Out_seq_len, N_batchs, Embedding)
+        [src/tgt]_mask : what elements to attend (triangular mask)
+        [src/tgt]_key_padding_mask : what is padding (True) and what is value (False)
+        '''
+
         src_mask = self.generate_square_subsequent_mask(self.seq_len)
         obj_emb = self.embedding(in_seq.view(self.seq_len, self.batch_size)) * math.sqrt(self.emb_size)
         obj_emb = self.pe(obj_emb)
