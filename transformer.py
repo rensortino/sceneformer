@@ -122,13 +122,7 @@ class Transformer(nn.Module):
         self.decoder.weight.data.uniform_(-initrange, initrange)
 
     def forward(self, in_seq, out_seq, src_mask=None, tgt_mask=None):
-        '''
-        Args:
-        in_seq : (In_seq_len, N_batchs, Embedding)
-        out_seq : (Out_seq_len, N_batchs, Embedding)
-        [src/tgt]_mask : what elements to attend (triangular mask)
-        [src/tgt]_key_padding_mask : what is padding (True) and what is value (False)
-        '''
+       
 
         src_mask = self.generate_square_subsequent_mask(self.seq_len)
         obj_emb = self.embedding(in_seq.view(self.seq_len, self.batch_size)) * math.sqrt(self.emb_size)

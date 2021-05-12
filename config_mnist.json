@@ -22,6 +22,7 @@
         "batch_size": 64,
         "img_w": 16,
         "img_h": 16,
+        "n_channels": 1,
         "shuffle": true,
         "validation_split": 0.1,
         "num_workers": 2

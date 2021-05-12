@@ -1,14 +1,12 @@
 import time
 import random
 import numpy as np
-import matplotlib.pyplot as plt
 import torch
 import torchvision.transforms as T
 from pytorch_lightning.callbacks import Callback
 from torchvision.utils import make_grid
+from PIL import Image
 import wandb
-
-
 
 
 class Logging(Callback):
@@ -42,9 +40,14 @@ def show_image(img):
     if type(img) == torch.Tensor:
         img = img.cpu().detach()
         
-    plt.imshow(np.transpose(img.numpy(), (1,2,0)), cmap="gray", interpolation='nearest')
+    img_array = np.transpose(img.numpy(), (1,2,0))
+    norm_img = (img_array - img_array.min()) / (img_array.max() - img_array.min()) * 255
+    PIL_image = Image.fromarray(norm_img.astype('uint8'), 'RGB')
+    PIL_image.show()
+    # plt.imshow(np.transpose(img.numpy(), (1,2,0)), cmap="gray", interpolation='nearest')
+    #image = plt.imshow(img_array, interpolation='nearest')
     #plt.show()
-    return plt
+    #return PIL_image, img_array
 
 
 def log_prediction(gt, pred, logger, nrow=16, title : str = "Logged Image"):
@@ -60,15 +63,9 @@ def log_prediction(gt, pred, logger, nrow=16, title : str = "Logged Image"):
     p_grid = make_grid(pred.cpu(), nrow=nrow, padding=16)
 
     wandb.log({title :[
-        wandb.Image(show_image(p_grid), caption="Matplotlib Pred"),
-        wandb.Image(show_image(gt_grid), caption="Matplotlib GT")
-]})
-
-
-    # wandb.log({title :[
-    #     wandb.Image(p_grid, caption="Prediction"),
-    #     wandb.Image(gt_grid, caption="Ground Truth"),
-    # ]})
+        wandb.Image(p_grid, caption="Prediction"),
+        wandb.Image(gt_grid, caption="Ground Truth"),
+    ]})
 
 
 

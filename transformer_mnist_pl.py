@@ -4,27 +4,28 @@ import torch
 from torch import nn
 from log_utils import Logging, show_image, log_prediction
 from attrdict import AttrDict
-from torchvision.utils import make_grid
-from torchvision import datasets
 from torch.nn import Transformer
 import torchvision.transforms as T
-from torch.utils.data import DataLoader, random_split
 from feature_extractor import ResNet18
+from data_processing import append_tokens, get_targets
+from data_modules import MNISTDataModule, CIFAR10DataModule
 
 import pytorch_lightning as pl
 from pytorch_lightning.loggers import WandbLogger
 
 import wandb
 
-from cgan import weights_init, DCGANGenerator, DCGANDiscriminator
+from cgan import weights_init, DCGANDiscriminator
 
-# TODO Change cuda() to to(device)
+# TODO Generalize labels for CIFAR
 
 TOKENS = {
         "SOS": -1,
         "EOS": -2,
         "PAD": -3
     }
+
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 class ImageGenerator(nn.Module):
     def __init__(self, img_size, emb_size=1024, ngf=128, channels=3):
@@ -51,7 +52,7 @@ class ImageGenerator(nn.Module):
         self.model = nn.Sequential(
             *block(emb_size, channels, 32, 1, 0),
             #*block(ngf, channels, 4, 2, 1, last=True)
-        ).cuda()
+        ).to(device)
 
     def forward(self, x):
         x = x.view(x.size(0) * x.size(1), self.emb_size, 1, 1)
@@ -79,124 +80,9 @@ class PositionalEncoding(nn.Module):
 # TODO Input mask should zero attention where there is pad
 # Target mask should do this and also the triu mask
 
-def get_img_grids(img_seq):
-    '''
-    img_ seq = [seq_len, h, w] = [4, 16, 16]
-    '''
-    img_seq = img_seq.unsqueeze(1) # Restore Channel dim
-    seq_len, c, h, w = img_seq.shape
-    grid = torch.zeros(seq_len, c, h, w, device=img_seq.device)
-    img_grids = []
-    for i, img in enumerate(img_seq):
-        # Place the image in the right quadrant
-        grid[i] = img
-        # Construct the grid from the batch of images
-        img_grid = make_grid(grid.cpu(), nrow=2, padding=0)
-        # Take the first channel (Grayscale images, the channels are all the same)
-        img_grids.append(img_grid[0].unsqueeze(0).unsqueeze(0)) # Restore channel and batch dimensions
-    return torch.cat(img_grids)
-    # img_grids = pad_sequence(img_grids, 6, torch.zeros(img_grids[0].shape))
-
-def pad_sequence(seq, max_seq_len):
-    '''
-    seq: [seq_len, embedding_size]
-    '''
-    if(len(seq) == max_seq_len):
-        return seq.tolist()
-    elif (len(seq) > max_seq_len):
-        raise("Sequence longer than allowed")
-    else :
-        # masks.append([False for _ in range(len(sentence))] + [True for _ in range(seq_length - len(sentence))])
-        padded_seq = seq.tolist() + [torch.full([seq.shape[1]], TOKENS['PAD']) for _ in range(max_seq_len - len(seq))]
-
-        return padded_seq
-
-
-def get_targets(feature_extractor, images, n_channels=1):
-    
-    '''
-    images shape: [seq_len, seq_batch, h, w]
-    '''
-
-    # Iterate over sequences
-    img_grids = [get_img_grids(images[:,i,:,:]) for i in range(images.shape[1])]
-
-    tgt_images = torch.cat(img_grids, dim=1).to(images.device)
-    # seq_len, seq_bs, h, w = tgt_images.shape
-    # tgt_images = tgt_images.view(seq_len * seq_bs, n_channels, h, w)
-
-    eos_token = torch.full([1] + list(tgt_images.shape[1:]), TOKENS['EOS'])
-    tgt_images = torch.cat((tgt_images.cpu(), eos_token)).cuda()
-    
-    tgt_vectors = []
-    for grid_seq in img_grids:
-        # For each sequence, add SOS and EOS token to the extracted vectors
-        
-        with torch.no_grad():
-            vector_seq = feature_extractor.get_vectors(grid_seq)
-        # TODO Put sos_token delcaration outside loop
-        sos_token = torch.full([1, vector_seq.shape[1]], TOKENS['SOS'])
-        eos_token = torch.full([1, vector_seq.shape[1]], TOKENS['EOS'])
-        vector_seq = torch.cat((sos_token, vector_seq.cpu(), eos_token))
-        tgt_vectors.append(vector_seq.unsqueeze(0))
-
-    return torch.cat(tgt_vectors).permute(1,0,2), tgt_images
-
-def get_padded_tgt(tgt_vectors):
-
-    '''
-    tgt_vectors: [batch, seq, emb_size]
-    '''
-        
-    max_seq_len = max([vec.shape[0] for vec in tgt_vectors])
-
-    padded_tgt = []
-    for vec_seq in tgt_vectors:
-        # Embedding sequence
-        padded_vec_seq = pad_sequence(vec_seq, max_seq_len)
-        padded_tgt.append(padded_vec_seq)
-
-    return padded_tgt
-
-class MNISTDataModule(pl.LightningDataModule):
-
-    def __init__(self, data_dir="data"):
-        super(MNISTDataModule, self).__init__()
-        self.data_dir = data_dir
-
-    def prepare_data(self):
-        datasets.MNIST(self.data_dir, train=True, download=True)
-        datasets.MNIST(self.data_dir, train=False, download=True)
-
-    def setup(self, stage=None):
-        mnist = datasets.MNIST(download=False, train=True, root="data").data.float()
-        self.transforms = T.Compose([ 
-            T.Resize((args.data_loader.img_h, args.data_loader.img_w)), 
-            T.ToTensor(), 
-            T.Normalize((mnist.mean()/255,), (mnist.std()/255,))
-        ])
-
-        # Assign train/val datasets for use in dataloaders
-        if stage == 'fit' or stage is None:
-            mnist = datasets.MNIST(self.data_dir, train=True, transform=self.transforms)
-            self.train_dataset, self.val_dataset = random_split(mnist, [55000, 5000])
-
-        # Assign test dataset for use in dataloader(s)
-        if stage == 'test' or stage is None:
-            self.test_dataset = datasets.MNIST(self.data_dir, train=False, transform=self.transforms)
-
-    def train_dataloader(self):
-        return DataLoader(self.train_dataset, batch_size=args.data_loader.batch_size, num_workers=0, shuffle=True, drop_last=True, pin_memory=True)
-
-    def val_dataloader(self):
-        return DataLoader(self.val_dataset, batch_size=args.data_loader.batch_size, num_workers=0, shuffle=False, drop_last=True, pin_memory=True)
-
-    def test_dataloader(self):
-        return DataLoader(self.test_dataset, batch_size=args.data_loader.batch_size, num_workers=0, shuffle=False, drop_last=True, pin_memory=True)
-
 class Sceneformer(pl.LightningModule):
     
-    def __init__(self, feature_extractor, img_gen, args, device):
+    def __init__(self, feature_extractor, img_gen, disc, args, device):
         super(Sceneformer, self).__init__()
         self.dev = device
         self.max_seq_len = args.model.max_seq_len
@@ -212,7 +98,6 @@ class Sceneformer(pl.LightningModule):
         
         # Transformer
         self.transformer = Transformer(
-            #feature_extractor,
             args.model.emb_size,
             #args.model.seq_bs,
             #args.model.seq_len,
@@ -226,9 +111,8 @@ class Sceneformer(pl.LightningModule):
             #self.dev)
 
         self.img_gen = img_gen
-        
-        # self.disc = DCGANDiscriminator(image_channels=1).cuda()
-        # self.disc.apply(weights_init)
+        self.disc = disc
+
 
         # self.init_weights()
 
@@ -263,7 +147,8 @@ class Sceneformer(pl.LightningModule):
 
         # Data loading
         images, labels = batch
-        images = images.view(args.model.seq_len, args.model.seq_bs, args.data_loader.img_h, args.data_loader.img_w)
+        images = images.unsqueeze(1) # add the transformer sequence dimension
+        images = images.view(args.model.seq_len, args.model.seq_bs, args.data_loader.n_channels, args.data_loader.img_h, args.data_loader.img_w)
         # Model forward
         in_seq = self.embedding(labels)
 
@@ -273,11 +158,54 @@ class Sceneformer(pl.LightningModule):
         self.log("Default Transformer Loss", step_loss)
         self.train_step += 1
         if self.global_step % args.trainer.log_every_n_steps == 0:
-            target_imgs = target_imgs.view(target_imgs.shape[0] * target_imgs.shape[1], 1, target_imgs.shape[2], target_imgs.shape[3])
+            target_imgs = target_imgs.view(target_imgs.shape[0] * target_imgs.shape[1], args.data_loader.n_channels, target_imgs.shape[3], target_imgs.shape[4])
             log_prediction(target_imgs, predictions, self.logger, title="Train Transformer Target and Ouptut")
 
         return step_loss
         #return {'loss': step_loss, 'preds': predictions}
+
+    def transformer_loss(self, outputs, targets):
+        # loss = torch.nn.KLDivLoss()
+        loss = torch.nn.MSELoss()
+        outputs = outputs.view(-1)
+        targets = targets.view(-1)
+        return loss(outputs, targets)
+
+    def transformer_step(self, in_seq, images):
+        r'''
+        Args:
+        in_seq : (In_seq_len, N_batchs, Embedding)
+        out_seq : (Out_seq_len, N_batchs, Embedding)
+        [src/tgt]_mask : what elements to attend (triangular mask)
+        [src/tgt]_key_padding_mask : what is padding (True) and what is value (False)
+
+        images shape:  [B,C,H,W]
+        '''
+        # Create target images
+        targets, tgt_imgs = get_targets(self.feature_extractor, images)
+        #padded_tgt = get_padded_tgt(targets)
+
+        # tgt = [<SOS>, [embeddings], <EOS> (, [<PAD>] ) ]
+        
+        in_seq = in_seq.unsqueeze(1).view(args.model.seq_bs, args.model.seq_len, -1)
+        in_seq = append_tokens(in_seq, TOKENS['EOS'], TOKENS['SOS'])
+        # FIXME Substitute with batch_firts=True
+        in_seq = torch.cat(in_seq).permute(1,0,2)
+
+        # Forward transformer
+        # tgt[:-1] (shifted right because the transformer has to predict based on previous output)
+        in_seq = in_seq.to(device)
+        targets = targets.to(device)
+        tgt_mask = self.transformer.generate_square_subsequent_mask(targets.shape[0] - 1).to(device)
+        trf_out = self(in_seq, targets[:-1], tgt_mask)
+
+        out_imgs = self.img_gen(trf_out)
+        # Compute loss
+        # tgt[1:] (shifted left to compare the real sequences, without the <SOS>)
+        t_loss = self.transformer_loss(out_imgs, tgt_imgs)
+        self.log("t_loss", t_loss)
+        return t_loss, out_imgs, tgt_imgs
+
 
     def training_epoch_end(self, training_step_outputs):
         pass
@@ -286,7 +214,8 @@ class Sceneformer(pl.LightningModule):
 
     def validation_step(self, batch, batch_idx):
         images, labels = batch
-        images = images.view(args.model.seq_len, args.model.seq_bs, args.data_loader.img_h, args.data_loader.img_w)
+        images = images.unsqueeze(1) # add the transformer sequence dimension
+        images = images.view(args.model.seq_len, args.model.seq_bs, args.data_loader.n_channels, args.data_loader.img_h, args.data_loader.img_w)
         in_seq = self.embedding(labels)
         step_loss, predictions, target_imgs = self.transformer_step(in_seq, images)
         
@@ -296,7 +225,7 @@ class Sceneformer(pl.LightningModule):
 
         self.val_step += 1
         if self.global_step % args.trainer.log_every_n_steps == 0:
-            target_imgs = target_imgs.view(target_imgs.shape[0] * target_imgs.shape[1], 1, target_imgs.shape[2], target_imgs.shape[3])
+            target_imgs = target_imgs.view(target_imgs.shape[0] * target_imgs.shape[1], args.data_loader.n_channels, target_imgs.shape[3], target_imgs.shape[4])
             log_prediction(target_imgs, predictions, self.logger, title="Validation Transformer Target and Ouptut")
         return step_loss
 
@@ -308,54 +237,12 @@ class Sceneformer(pl.LightningModule):
         scheduler = torch.optim.lr_scheduler.StepLR(optimizer, 1.0, gamma=0.95)
         return [optimizer], [scheduler]
 
-    def transformer_loss(self, outputs, targets):
-        # loss = torch.nn.KLDivLoss()
-        loss = torch.nn.MSELoss()
-        outputs = outputs.view(-1)
-        targets = targets.view(-1)
-        return loss(outputs, targets)
-
-    def transformer_step(self, in_seq, images):
-
-        '''
-        images shape:  [B,C,H,W]
-        '''
-        # Create target images
-        targets, tgt_imgs = get_targets(self.feature_extractor, images)
-        #padded_tgt = get_padded_tgt(targets)
-
-        # tgt = [<SOS>, [embeddings], <EOS> (, [<PAD>] ) ]
-        
-        in_seq = in_seq.unsqueeze(1).view(args.model.seq_bs, args.model.seq_len, -1)
-        #FIXME Export in function
-        new_seq = []
-        for seq in in_seq:
-            eos_token = torch.full([1, seq.shape[1]], TOKENS['EOS'])
-            seq = torch.cat((seq.cpu(), eos_token))
-            new_seq.append(seq.unsqueeze(0))
-        # FIXME Substitute with batch_firts=True
-        in_seq = torch.cat(new_seq).permute(1,0,2)
-
-        # Forward transformer
-        # tgt[:-1] (shifted right because the transformer has to predict based on previous output)
-        in_seq = in_seq.cuda()
-        targets = targets.cuda()
-        tgt_mask = self.transformer.generate_square_subsequent_mask(targets.shape[0] - 1).cuda()
-        trf_out = self(in_seq, targets[:-1], tgt_mask)
-
-        out_imgs = self.img_gen(trf_out)
-        # Compute loss
-        # tgt[1:] (shifted left to compare the real sequences, without the <SOS>)
-        t_loss = self.transformer_loss(out_imgs, tgt_imgs)
-        self.log("t_loss", t_loss)
-        return t_loss, out_imgs, tgt_imgs
-
 def main(args):
 
     assert args.model.emb_size % args.model.n_heads == 0, "Embedding size not divisible by number of heads"
     assert args.data_loader.batch_size == args.model.seq_len * args.model.seq_bs, "Batch size is not seq_len * transformer_batch"
 
-    data_module = MNISTDataModule()
+    data_module = CIFAR10DataModule(args)
     wandb_logger = WandbLogger(project="MNIST Transformer")
     trainer = pl.Trainer(
         gpus=1,
@@ -389,28 +276,26 @@ def main(args):
 
     wandb.init(
         config=hparams,
-        #mode="disabled"
+        mode="disabled"
     )
 
-    
-
-    wandb.run.name = "MSE Loss"
+    wandb.run.name = "CIFAR10 Dataset"
 
     config = wandb.config
 
     device = 'cuda:0' if args['n_gpu'] == 1 else 'cpu'
 
     image_size = (args.data_loader.img_w * int(math.sqrt(args.model.seq_len)), args.data_loader.img_h * int(math.sqrt(args.model.seq_len)))
-
     
-    feature_extractor = ResNet18(args.model.fe_weights_path).cuda()
-    img_gen = ImageGenerator(image_size, emb_size=512, channels=1).cuda()
-    model = Sceneformer(feature_extractor, img_gen, args, device)
+    feature_extractor = ResNet18(args.model.fe_weights_path).to(device)
+    img_gen = ImageGenerator(image_size, emb_size=512, channels=args.data_loader.n_channels).to(device)
+    disc = DCGANDiscriminator(image_channels=args.data_loader.n_channels)
+    model = Sceneformer(feature_extractor, img_gen, disc, args, device)
 
     trainer.fit(model, data_module)
     
 if __name__ == '__main__':
-    with open("config.json") as c:
-        args = AttrDict(json.load(c))
+    with open("config_cifar.json") as conf:
+        args = AttrDict(json.load(conf))
 
     main(args)
