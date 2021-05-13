@@ -1,7 +1,7 @@
 
 from torch.nn import Transformer
 import pytorch_lightning as pl
-from log_utils import show_image, log_prediction
+from log_utils import log_prediction
 import torch
 from torch import nn
 import torchvision.transforms as T
@@ -79,6 +79,7 @@ class YTID(pl.LightningModule):
                 args,
                 criterion):
         super(YTID, self).__init__()
+        self.automatic_optimization = False # disable automatic calling of backward()
         self.max_seq_len = args.model.max_seq_len
         self.feature_extractor = feature_extractor
         self.pos_enc = pos_enc
@@ -151,13 +152,20 @@ class YTID(pl.LightningModule):
         images, labels = batch
         images = images.unsqueeze(1) # add the transformer sequence dimension
         images = images.view(self.args.model.seq_len, self.args.model.seq_bs, self.args.data_loader.n_channels, self.args.data_loader.img_h, self.args.data_loader.img_w)
+
+        opt = self.optimizers()
+        opt.zero_grad()
         
         # Model forward
         step_loss, predictions, target_imgs = self.transformer_step(labels, images)
 
+        self.manual_backward(step_loss)
+        opt.step()
+
         # Logging
-        self.logger.experiment.log({'Train t_loss with custom step': step_loss, 'train_step': self.train_step})
-        self.log("Default Transformer Loss", step_loss)
+        #self.logger.experiment.log({'Train t_loss': step_loss, 'train_step': self.train_step})
+        self.logger.experiment.add_scalar('Loss/Train', step_loss, self.train_step)
+        self.log('Default Train t_loss', step_loss)
         self.train_step += 1
         if self.global_step % self.args.trainer.log_every_n_steps == 0:
             target_imgs = target_imgs.view(target_imgs.shape[0] * target_imgs.shape[1], self.args.data_loader.n_channels, target_imgs.shape[3], target_imgs.shape[4])
@@ -200,12 +208,22 @@ class YTID(pl.LightningModule):
             seq_loss = criterion(outputs[i], targets[i])
             loss += seq_loss
 
-        return loss
+        
+        return loss / (outputs.shape[0] * outputs.shape[1])
 
-    def training_epoch_end(self, training_step_outputs):
-        pass
-        # for pred in training_step_outputs:
-        #     pass
+    def custom_histogram_adder(self):
+        for name,params in self.named_parameters():
+            self.logger.experiment.add_histogram(name,params,self.current_epoch)
+
+    def training_epoch_end(self,outputs):
+        if(self.current_epoch==1):
+            sampleImg=torch.rand((4,16,512))
+            self.logger.experiment.add_graph(YTID(), sampleImg)
+
+        self.custom_histogram_adder()
+
+ 
+
 
     def validation_step(self, batch, batch_idx):
         images, labels = batch
@@ -215,7 +233,8 @@ class YTID(pl.LightningModule):
         step_loss, predictions, target_imgs = self.transformer_step(labels, images)
         
         # Logging
-        self.logger.experiment.log({'Val t_loss': step_loss, 'val_step': self.val_step})
+        #self.logger.experiment.log({'Val t_loss': step_loss, 'val_step': self.val_step})
+        self.logger.experiment.add_scalar('Loss/Val', step_loss, self.val_step)
         self.log("Default Transformer Loss", step_loss)
 
         self.val_step += 1

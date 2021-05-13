@@ -11,7 +11,7 @@ from feature_extractor import ResNet18
 from data_modules import MNISTDataModule, CIFAR10DataModule
 
 import pytorch_lightning as pl
-from pytorch_lightning.loggers import WandbLogger
+from pytorch_lightning.loggers import WandbLogger, TensorBoardLogger
 
 import wandb
 
@@ -29,7 +29,8 @@ def main(args):
     assert args.data_loader.batch_size == args.model.seq_len * args.model.seq_bs, "Batch size is not seq_len * transformer_batch"
 
     data_module = CIFAR10DataModule(args)
-    wandb_logger = WandbLogger(project="MNIST Transformer")
+    #wandb_logger = WandbLogger(project="MNIST Transformer")
+    tb_logger = TensorBoardLogger("tb_logs", name="YTID")
     trainer = pl.Trainer(
         gpus=1,
         # fast_dev_run=True,
@@ -41,13 +42,13 @@ def main(args):
         progress_bar_refresh_rate=20,
         #max_epochs=epochs,
         #profiler=True,
-        logger=wandb_logger,
+        logger=tb_logger,
         callbacks=[
             Logging(),
         ]
     )
 
-    wandb.login()
+    #wandb.login()
 
     hparams = dict(
         nhid = args.model.ff_dim, # the dimension of the feedforward network model in nn.TransformerEncoder
@@ -60,14 +61,14 @@ def main(args):
         img_w = args.data_loader.img_w,
     )
 
-    wandb.init(
-        config=hparams,
-        #mode="disabled"
-    )
+    #wandb.init(
+    #    config=hparams,
+    #    #mode="disabled"
+    #)
 
     #wandb.mode = "disabled"
 
-    wandb.run.name = "Loss per element"
+    #wandb.run.name = "LR 100"
 
     config = wandb.config
 
@@ -88,7 +89,7 @@ def main(args):
     disc = DCGANDiscriminator(image_channels=args.data_loader.n_channels).to(args.device)
     model = YTID(feature_extractor, embedding, pos_enc, img_gen, disc, args, criterion).to(args.device)
 
-    wandb.watch(model, log_freq=100, log="all")
+    #wandb_logger.watch(model, log_freq=1, log="all")
 
     trainer.fit(model, data_module)
     

@@ -27,9 +27,9 @@ class Logging(Callback):
         #trainer.logger.experiment.log({"Reconstructed Image": [wandb.Image(np_image, caption="First of each batch")]})
         # self.log('pl_logger_train_loss', pl_module.step_loss)
         # trainer.logger.experiment.add_scalar('training_loss', train_loss_mean, global_step=pl_module.current_epoch)
-        pl_module.logger.experiment.log({'Epoch Elapsed Time': time.time() - self.start_time})
+        pl_module.logger.experiment.add_scalar('Epoch Elapsed Time', time.time() - self.start_time)
 
-def show_image(img):
+def img_to_PIL(img):
 
     if len(img.shape) > 4:
         raise Exception("Too many dimensions in image to show")
@@ -44,7 +44,7 @@ def show_image(img):
     img_array = np.transpose(img.numpy(), (1,2,0))
     norm_img = (img_array - img_array.min()) / (img_array.max() - img_array.min()) * 255
     PIL_image = Image.fromarray(norm_img.astype('uint8'), 'RGB')
-    PIL_image.show()
+    return img_array
     # plt.imshow(np.transpose(img.numpy(), (1,2,0)), cmap="gray", interpolation='nearest')
     #image = plt.imshow(img_array, interpolation='nearest')
     #plt.show()
@@ -63,10 +63,17 @@ def log_prediction(gt, pred, logger, nrow=16, title : str = "Logged Image"):
     gt_grid = make_grid(gt.cpu(), nrow=nrow, padding=16)
     p_grid = make_grid(pred.cpu(), nrow=nrow, padding=16)
 
-    wandb.log({title :[
-        wandb.Image(p_grid, caption="Prediction"),
-        wandb.Image(gt_grid, caption="Ground Truth"),
-    ]})
+    gt_img = img_to_PIL(gt_grid)
+    p_img = img_to_PIL(p_grid)
+
+    #wandb.log({title :[
+    #    wandb.Image(p_grid, caption="Prediction"),
+    #    wandb.Image(gt_grid, caption="Ground Truth"),
+    #]})
+
+    logger.experiment.add_image("Prediction", p_img, dataformats="HWC")
+    logger.experiment.add_image("Ground Truth", gt_img, dataformats="HWC")
+
 
 
 
