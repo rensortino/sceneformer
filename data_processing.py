@@ -1,5 +1,6 @@
 import torch
 from torchvision.utils import make_grid
+from log_utils import show_image
 
 TOKENS = {
         "SOS": -1,
@@ -48,21 +49,21 @@ def get_targets(feature_extractor, images, n_channels=1):
     # Iterate over sequences
     img_grids = [get_img_grids(images[:,i,:,:]) for i in range(images.shape[1])]
 
-    tgt_images = torch.tensor(img_grids).permute(1,0,2,3,4)
+    tgt_images = torch.tensor(img_grids, device=images.device).permute(1,0,2,3,4)
     # seq_len, seq_bs, h, w = tgt_images.shape
     # tgt_images = tgt_images.view(seq_len * seq_bs, n_channels, h, w)
 
-    eos_token = torch.full([1] + list(tgt_images.shape[1:]), TOKENS['EOS'])
-    tgt_images = torch.cat((tgt_images, eos_token)).to(device)
+    eos_token = torch.full([1] + list(tgt_images.shape[1:]), TOKENS['EOS'], device=images.device)
+    tgt_images = torch.cat((tgt_images, eos_token))
 
-    img_grids = torch.tensor(img_grids)
+    img_grids = torch.tensor(img_grids, device=images.device)
     bs, sl, ch, h, w = img_grids.shape
     img_grids = img_grids.view(bs * sl, 1, ch, w, h).squeeze(1) # [batch * seq_len, channels, height, width]
     with torch.no_grad():
-        vector_seq = feature_extractor.get_vectors(torch.tensor(img_grids)) # [batch * seq_len, emb_size]
+        vector_seq = feature_extractor(torch.tensor(img_grids)) # [batch * seq_len, emb_size]
     vector_seq = vector_seq.unsqueeze(1).view(bs, sl, -1) # [batch, seq_len, emb_size]
 
-    tgt_vectors = append_tokens(vector_seq, TOKENS['EOS'])
+    tgt_vectors = append_tokens(vector_seq, TOKENS['EOS'], TOKENS['SOS'])
 
     return tgt_vectors.permute(1,0,2), tgt_images
 

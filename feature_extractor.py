@@ -14,29 +14,29 @@ class ResNet18(nn.Module):
             self.model.conv1 = nn.Conv2d(3, 64, kernel_size=3, stride=1, padding=1, bias=False)
         self.model.load_state_dict(torch.load(w_path))
         self.out_layer = self.model._modules.get('avgpool')
-        self.embedding_size = self.model._modules.get('fc').in_features
-        # FIXME del self.model.fc ?
+        self.embedding_size = self.model.fc.in_features
+        self.model.fc = nn.Identity()
 
-    def get_vectors(self, images):
-        self.model.eval()
-        # Create a vector of zeros that will hold our feature vector
-        # The 'avgpool' layer has an output size of 512
-        visual_embedding = torch.zeros(images.shape[0], self.embedding_size).cuda()
-
-        # Define a function that will copy the output of a layer
-        def copy_data(module, input, output):
-            visual_embedding.copy_(output.squeeze(3).squeeze(2))
-
-        # Attach that function to our selected layer
-        #hook = self.out_layer.register_forward_hook(copy_data)
-        hook = self.out_layer.register_forward_hook(copy_data)
-        # Run the model on our transformed image
-        with torch.no_grad():
-            self.model(images.cuda())
-        # Detach our copy function from the layer
-        hook.remove()
-        # Return the feature vector
-        return visual_embedding
+    # def get_vectors(self, images):
+    #     self.model.eval()
+    #     # Create a vector of zeros that will hold our feature vector
+    #     # The 'avgpool' layer has an output size of 512
+    #     visual_embedding = torch.zeros(images.shape[0], self.embedding_size).cuda()
+# 
+    #     # Define a function that will copy the output of a layer
+    #     def copy_data(module, input, output):
+    #         visual_embedding.copy_(output.squeeze(3).squeeze(2))
+# 
+    #     # Attach that function to our selected layer
+    #     #hook = self.out_layer.register_forward_hook(copy_data)
+    #     hook = self.out_layer.register_forward_hook(copy_data)
+    #     # Run the model on our transformed image
+    #     with torch.no_grad():
+    #         self.model(images.cuda())
+    #     # Detach our copy function from the layer
+    #     hook.remove()
+    #     # Return the feature vector
+    #     return visual_embedding
 
     def forward(self, imgs):
         output = self.model(imgs)

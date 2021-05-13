@@ -19,8 +19,9 @@ class Logging(Callback):
         self.start_time = time.time()
 
     def on_fit_start(self, trainer, pl_module):
-        if not trainer.fast_dev_run:
-            trainer.logger.watch(trainer.model)
+        pass
+        #if not trainer.fast_dev_run:
+            #trainer.logger.watch(trainer.model)
 
     def on_epoch_end(self, trainer, pl_module):
         #trainer.logger.experiment.log({"Reconstructed Image": [wandb.Image(np_image, caption="First of each batch")]})

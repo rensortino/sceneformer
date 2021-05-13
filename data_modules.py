@@ -41,7 +41,6 @@ class MNISTDataModule(pl.LightningDataModule):
     def test_dataloader(self):
         return DataLoader(self.test_dataset, batch_size=self.args.batch_size, num_workers=0, shuffle=False, drop_last=True, pin_memory=True)
 
-
 class CIFAR10DataModule(pl.LightningDataModule):
     def __init__(self, args, data_dir="data"):
         super().__init__()
