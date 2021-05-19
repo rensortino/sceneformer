@@ -135,8 +135,9 @@ data/
 images/
 *logs/
 
-# Useless files
+
 *.txt
 *.pth*
+*.pt*
 ckpt/
 wandb

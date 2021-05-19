@@ -7,13 +7,12 @@ from torch import nn
 import torchvision.transforms as T
 import math
 from data_processing import get_targets, append_tokens
-from torchviz import make_dot, make_dot_from_trace
-from graphviz import Source
+import wandb
 
 TOKENS = {
-        "SOS": -1,
-        "EOS": -2,
-        "PAD": -3
+        "SOS": 11,
+        "EOS": 12,
+        "PAD": 13
     }
 
 class ImageGenerator(nn.Module):
@@ -39,8 +38,8 @@ class ImageGenerator(nn.Module):
         #)
 
         self.model = nn.Sequential(
-            *block(emb_size, ngf, 32, 1, 0),
-            *block(ngf, channels, 4, 2, 1, last=True)
+            *block(emb_size, channels, 32, 1, 0, last=True),
+            #*block(ngf, channels, 4, 2, 1, last=True)
         )
 
     def forward(self, x):
@@ -50,7 +49,7 @@ class ImageGenerator(nn.Module):
 
 class PositionalEncoding(nn.Module):
 
-    def __init__(self, d_model, dropout=0.1, max_len=5000):
+    def __init__(self, d_model, dropout=0.1, max_len=10):
         super(PositionalEncoding, self).__init__()
         self.dropout = nn.Dropout(p=dropout)
 
@@ -107,7 +106,7 @@ class YTID(pl.LightningModule):
 
         # self.init_weights()
 
-    def forward(self, labels, targets, tgt_maskk=None, src_key_padding_mask=None, tgt_key_padding_mask=None):
+    def forward(self, src, targets, src_key_padding_mask=None, tgt_key_padding_mask=None):
 
         r"""Take in and process masked source/target sequences.
 
@@ -130,21 +129,26 @@ class YTID(pl.LightningModule):
         """
 
         # Create input embeddings
-        in_seq = self.embedding(labels)* math.sqrt(self.args.model.emb_size)
-        in_seq = in_seq.unsqueeze(1).view(self.args.model.seq_bs, self.args.model.seq_len, -1)
-        in_seq = append_tokens(in_seq, TOKENS['EOS'])
-        in_seq = self.pos_enc(in_seq)
+        in_seq = self.embedding(src)* math.sqrt(self.args.model.emb_size)
+        # in_seq = in_seq.unsqueeze(1).view(self.args.model.seq_bs, self.args.model.seq_len, -1)
         in_seq = in_seq.permute(1,0,2)
+        #in_seq = self.pos_enc(in_seq)
 
         # Forward transformer
         # tgt[:-1] (shifted right because the transformer has to predict based on previous output)
         in_seq = in_seq.to(self.args.device)
         targets = targets.to(self.args.device)
         tgt_mask = self.transformer.generate_square_subsequent_mask(targets.shape[0] - 1).to(self.args.device)
-        trf_out = self.transformer(in_seq, targets[:-1], tgt_mask)
+        trf_out = self.transformer(in_seq, targets[:-1], tgt_mask=tgt_mask)
 
         out_imgs = self.img_gen(trf_out)
         return out_imgs
+
+    def make_src_mask(self, src):
+        src_mask = src.transpose(0, 1) == self.src_pad_idx
+
+        # (N, src_len)
+        return src_mask.to(self.device)
 
     def training_step(self, batch, batch_idx):#, optimizer_idx):
 
@@ -190,11 +194,15 @@ class YTID(pl.LightningModule):
         #padded_tgt = get_padded_tgt(targets)
 
         # tgt = [<SOS>, [embeddings], <EOS> (, [<PAD>] ) ]
-        out_imgs = self(labels, targets)
+        in_seq = labels.reshape(self.args.model.seq_bs, self.args.model.seq_len)
+        in_list = append_tokens(in_seq.tolist(), TOKENS['EOS'], TOKENS['SOS'])
+        in_seq = torch.tensor(in_list, device=self.args.device)
+        out_imgs = self(in_seq, targets)
         # Compute loss
         # tgt[1:] (shifted left to compare the real sequences, without the <SOS>)
         t_loss = self.transformer_loss(self.criterion, out_imgs, tgt_imgs)
         self.log("t_loss", t_loss)
+        wandb.log({"t_loss": t_loss})
         return t_loss, out_imgs, tgt_imgs
 
     def transformer_loss(self, criterion,  outputs, targets):
@@ -202,27 +210,25 @@ class YTID(pl.LightningModule):
         targets = targets.view(targets.shape[0] * targets.shape[1], -1)
         outputs = outputs.view(targets.shape)
 
-        loss = 0
+        loss = criterion(outputs, targets)
 
-        for i in range(outputs.shape[0]):
-            seq_loss = criterion(outputs[i], targets[i])
-            loss += seq_loss
+        # for i in range(outputs.shape[0]):
+        #     seq_loss = criterion(outputs[i], targets[i])
+        #     loss += seq_loss
 
         
-        return loss / (outputs.shape[0] * outputs.shape[1])
+        return loss #/ (outputs.shape[0] * outputs.shape[1])
 
     def custom_histogram_adder(self):
         for name,params in self.named_parameters():
             self.logger.experiment.add_histogram(name,params,self.current_epoch)
 
     def training_epoch_end(self,outputs):
-        if(self.current_epoch==1):
-            sampleImg=torch.rand((4,16,512))
-            self.logger.experiment.add_graph(YTID(), sampleImg)
+        #if(self.current_epoch==1):
+        #    sampleImg=torch.rand((4,16,512))
+        #    self.logger.experiment.add_graph(YTID(), sampleImg)
 
         self.custom_histogram_adder()
-
- 
 
 
     def validation_step(self, batch, batch_idx):

@@ -44,7 +44,7 @@ def img_to_PIL(img):
     img_array = np.transpose(img.numpy(), (1,2,0))
     norm_img = (img_array - img_array.min()) / (img_array.max() - img_array.min()) * 255
     PIL_image = Image.fromarray(norm_img.astype('uint8'), 'RGB')
-    return img_array
+    return norm_img
     # plt.imshow(np.transpose(img.numpy(), (1,2,0)), cmap="gray", interpolation='nearest')
     #image = plt.imshow(img_array, interpolation='nearest')
     #plt.show()
@@ -66,10 +66,10 @@ def log_prediction(gt, pred, logger, nrow=16, title : str = "Logged Image"):
     gt_img = img_to_PIL(gt_grid)
     p_img = img_to_PIL(p_grid)
 
-    #wandb.log({title :[
-    #    wandb.Image(p_grid, caption="Prediction"),
-    #    wandb.Image(gt_grid, caption="Ground Truth"),
-    #]})
+    wandb.log({title :[
+        wandb.Image(p_grid, caption="Prediction"),
+        wandb.Image(gt_grid, caption="Ground Truth"),
+    ]})
 
     logger.experiment.add_image("Prediction", p_img, dataformats="HWC")
     logger.experiment.add_image("Ground Truth", gt_img, dataformats="HWC")

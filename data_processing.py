@@ -2,8 +2,8 @@ import torch
 from torchvision.utils import make_grid
 
 TOKENS = {
-        "SOS": -1,
-        "EOS": -2,
+        "SOS": -0.1,
+        "EOS": -0.2,
         "PAD": -3
     }
 
@@ -27,10 +27,12 @@ def get_targets(feature_extractor, images, n_channels=1):
     bs, sl, ch, h, w = img_grids.shape
     img_grids = img_grids.view(bs * sl, 1, ch, w, h).squeeze(1) # [batch * seq_len, channels, height, width]
     with torch.no_grad():
-        vector_seq = feature_extractor(torch.tensor(img_grids)) # [batch * seq_len, emb_size]
+        vector_seq = feature_extractor(img_grids.detach().clone()) # [batch * seq_len, emb_size]
     vector_seq = vector_seq.unsqueeze(1).view(bs, sl, -1) # [batch, seq_len, emb_size]
 
-    tgt_vectors = append_tokens(vector_seq, TOKENS['EOS'], TOKENS['SOS'])
+    tgt_list = append_tokens(vector_seq.tolist(), TOKENS['EOS'], TOKENS['SOS'])
+
+    tgt_vectors = torch.tensor(tgt_list)
 
     return tgt_vectors.permute(1,0,2), tgt_images
 
@@ -57,13 +59,21 @@ def append_tokens(sequences, eos_token, sos_token=None):
     out_seq = []
     for seq in sequences:
         # For each sequence, add SOS and EOS token to the extracted vectors
-        if sos_token is not None:
-            sos = torch.full([1, seq.shape[1]], sos_token)
-            seq = torch.cat((sos, seq.cpu()))
-        eos = torch.full([1, seq.shape[1]], eos_token)
-        seq = torch.cat((seq.cpu(), eos))
-        out_seq.append(seq.unsqueeze(0))
-    return torch.cat(out_seq)
+        if type(seq[0]) == int:
+            seq.insert(0, sos_token)
+            seq.append(eos_token)
+        elif type(seq[0]) == list:
+            seq.insert(0, [sos_token] * len(seq[0]))
+            seq.append([eos_token] * len(seq[0]))
+        else:
+            raise Exception("Input type unrecognized")                        
+        #if sos_token is not None:
+        #    sos = torch.full([1, seq.shape[1]], sos_token)
+        #    seq = torch.cat((sos, seq.cpu()))
+        #eos = torch.full([1, seq.shape[1]], eos_token)
+        #seq = torch.cat((seq.cpu(), eos))
+        out_seq.append(seq)
+    return out_seq
 
 def get_padded_tgt(tgt_vectors):
 

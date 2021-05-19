@@ -9,7 +9,7 @@
         "n_layers" : 8,      
         "n_heads" : 8,       
         "dropout" : 0.2,    
-        "lr" : 1,
+        "lr" : 0.5,
         "loss": "mse",
         "fe_weights_path": "ckpt/cifar10/resnet18.pt",
         "num_classes": 10,

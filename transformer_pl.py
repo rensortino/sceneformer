@@ -17,10 +17,14 @@ import wandb
 
 from cgan import weights_init, DCGANDiscriminator
 
-# TODO Generalize labels for CIFAR
-
 # TODO Input mask should zero attention where there is pad
 # Target mask should do this and also the triu mask
+
+TOKENS = {
+        "SOS": 11,
+        "EOS": 12,
+        "PAD": 13
+}
 
 
 def main(args):
@@ -29,7 +33,7 @@ def main(args):
     assert args.data_loader.batch_size == args.model.seq_len * args.model.seq_bs, "Batch size is not seq_len * transformer_batch"
 
     data_module = CIFAR10DataModule(args)
-    #wandb_logger = WandbLogger(project="MNIST Transformer")
+    wandb_logger = WandbLogger(project="MNIST Transformer")
     tb_logger = TensorBoardLogger("tb_logs", name="YTID")
     trainer = pl.Trainer(
         gpus=1,
@@ -48,7 +52,7 @@ def main(args):
         ]
     )
 
-    #wandb.login()
+    wandb.login()
 
     hparams = dict(
         nhid = args.model.ff_dim, # the dimension of the feedforward network model in nn.TransformerEncoder
@@ -61,12 +65,12 @@ def main(args):
         img_w = args.data_loader.img_w,
     )
 
-    #wandb.init(
-    #    config=hparams,
-    #    #mode="disabled"
-    #)
+    wandb.init(
+        config=hparams,
+        mode="disabled"
+    )
 
-    #wandb.mode = "disabled"
+    wandb.mode = "disabled"
 
     #wandb.run.name = "LR 100"
 
@@ -78,7 +82,7 @@ def main(args):
     
     feature_extractor = ResNet18(args.model.fe_weights_path).to(args.device)
     pos_enc = PositionalEncoding(args.model.emb_size, args.model.dropout).to(args.device)
-    embedding = torch.nn.Embedding(args.model.num_classes, args.model.emb_size).to(args.device)
+    embedding = torch.nn.Embedding(args.model.num_classes + len(TOKENS), args.model.emb_size).to(args.device)
 
     if args.model.loss == "mse":
         criterion = torch.nn.MSELoss()
