@@ -18,9 +18,9 @@ class MNISTDataModule(pl.LightningDataModule):
     def setup(self, stage=None):
         mnist = datasets.MNIST(download=False, train=True, root="data").data.float()
         self.transforms = T.Compose([ 
-            T.Resize((self.args.img_h, self.args.img_w)), 
-            T.ToTensor(), 
-            T.Normalize((mnist.mean()/255,), (mnist.std()/255,))
+            T.Resize((self.args.img_h, self.args.img_w)),
+            T.ToTensor(),
+            #T.Normalize((mnist.mean()/255,), (mnist.std()/255,))
         ])
 
         # Assign train/val datasets for use in dataloaders

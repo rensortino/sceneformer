@@ -38,7 +38,7 @@ def _make_block(
         if not last_block:
             disc_block = nn.Sequential(
                 nn.Conv2d(in_channels, out_channels, kernel_size, stride, padding, bias=bias),
-                #nn.BatchNorm2d(out_channels) if batch_norm else nn.Identity(),
+                nn.BatchNorm2d(out_channels) if batch_norm else nn.Identity(),
                 nn.LeakyReLU(0.2, inplace=True),
             )
         else:
@@ -120,11 +120,12 @@ class DCGANDiscriminator(nn.Module):
             _make_block("discriminator", feature_maps, feature_maps * 2),
             _make_block("discriminator", feature_maps * 2, feature_maps * 4),
             _make_block("discriminator", feature_maps * 4, feature_maps * 8),
-            _make_block("discriminator", feature_maps * 8, 1, kernel_size=4, stride=1, padding=0, last_block=True),
+            #_make_block("discriminator", feature_maps * 8, 1, kernel_size=3, stride=2, padding=0, last_block=True),
+            _make_block("discriminator", feature_maps * 8, 1, kernel_size=2, stride=1, padding=0, last_block=True),
         )
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        return self.model(x).view(-1, 1).squeeze(1)
+        return self.model(x).squeeze(3).squeeze(2)
 
 
 def generator_loss(self, labels, images):

@@ -75,12 +75,10 @@ def log_prediction(gt, pred, logger, nrow=16, title : str = "Logged Image"):
     logger.experiment.add_image("Ground Truth", gt_img, dataformats="HWC")
 
 
-
-
 def convert_weights_pl_to_pt(w_path, out_path):
-    state_dict = torch.load('ckpt/resnet18_mnist_unformatted.pt')['state_dict']
+    state_dict = torch.load(w_path)['state_dict']
     new_sd = {}
     for k in state_dict.keys():
         new_k = k[6:] #strip the model string
         new_sd[new_k] = state_dict[k]
-    torch.save(new_sd, 'resnet18_mnist.pt')
+    torch.save(new_sd, out_path)
