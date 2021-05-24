@@ -48,8 +48,8 @@ def process_labels(labels):
     sos_token = 11
     eos_token = 12
     in_list = append_tokens(labels.tolist(), eos_token, sos_token)
-    in_seq = torch.tensor(in_list, device=self.args.device)
-    in_seq = in_seq.t()
+    in_seq = torch.tensor(in_list, device=labels.device)
+    return in_seq.t()
 
 def get_bboxes(img_seq):
     '''

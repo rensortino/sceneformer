@@ -1,7 +1,7 @@
 import math
 import json
 import torch
-from ytid import YTID, ImageGenerator, PositionalEncoding
+from ytid import YTID, ImageGenerator, PositionalEncoding, ImageTransformer
 import numpy as np
 from attrdict import AttrDict
 from log_utils import Logging
@@ -93,8 +93,21 @@ def main(args):
     embedding = torch.nn.Embedding(args.model.num_classes + len(TOKENS), args.model.emb_size).to(args.device)
 
     img_gen = ImageGenerator(image_size, emb_size=args.model.emb_size, ngf=16, channels=args.data_loader.n_channels).to(args.device)
+    transformer = ImageTransformer(
+            args.model.emb_size,
+            args.model.n_heads,
+            args.model.n_layers,
+            args.model.n_layers,
+            args.model.ff_dim,
+            args.model.dropout,
+            args.data_loader,
+            args.device,
+            embedding,
+            img_gen,
+            pos_enc
+        ).to(args.device)
     disc = DCGANDiscriminator(image_channels=args.data_loader.n_channels).to(args.device)
-    model = YTID(feature_extractor, embedding, pos_enc, img_gen, disc, args, criterion).to(args.device)
+    model = YTID(feature_extractor, transformer, disc, args, criterion).to(args.device)
 
     trainer.fit(model, data_module)
     

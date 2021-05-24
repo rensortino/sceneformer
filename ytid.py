@@ -67,23 +67,95 @@ class PositionalEncoding(nn.Module):
         x = x + self.pe[:x.size(0), :]
         return self.dropout(x)
 
+class ImageTransformer(nn.Module):
+    def __init__(self,  emb_size,
+                        n_heads,
+                        n_enc_layers,
+                        n_dec_layers,
+                        ff_dim,
+                        dropout,
+                        data_options,
+                        device,
+                        embedding: nn.Module,
+                        img_gen: nn.Module,
+                        pos_enc: nn.Module):
+
+        super(ImageTransformer, self).__init__()
+
+        self.data_options = data_options
+
+        # Transformer
+        self.transformer = Transformer(
+            emb_size,
+            n_heads,
+            n_enc_layers,
+            n_dec_layers,
+            ff_dim,
+            dropout,
+        )
+
+        self.emb_size = emb_size
+        self.device = device
+
+        self.embedding = embedding
+        self.img_gen = img_gen
+        self.pos_enc = pos_enc
+
+    def make_src_mask(self, src):
+        src_mask = src.transpose(0, 1) == self.src_pad_idx
+
+        # (N, src_len)
+        return src_mask.to(self.device)
+
+    def forward(self, src, targets, src_key_padding_mask=None, tgt_key_padding_mask=None):
+
+        r"""Take in and process masked source/target sequences.
+
+        Args:
+            src/tgt: the sequence to the encoder/decoder (required). Shape: (S/T, N, E)
+            [src/tgt]_mask: the additive mask for the src/tgt sequence (optional). Shape: (S/T, S/T)
+            memory_mask: the additive mask for the encoder output (optional). Shape: (T, S)
+            [src/tgt]_key_padding_mask: the ByteTensor mask for src/tgt keys per batch (optional). Shape: (N, S/T)
+            memory_key_padding_mask: the ByteTensor mask for memory keys per batch (optional). Shape: (N, S)
+        """
+
+        # Create input embeddings
+        in_seq = self.embedding(src.int())* math.sqrt(self.emb_size)
+        in_seq = self.pos_enc(in_seq)
+
+        # Forward transformer
+        in_seq = in_seq.to(self.device)
+        targets = targets.to(self.device)
+        tgt_mask = self.transformer.generate_square_subsequent_mask(targets.shape[0]).to(self.device)
+        trf_out = self.transformer(in_seq, targets, tgt_mask=tgt_mask)
+        image_vector = trf_out[:,:,:-4]
+        bbox = trf_out[:,:,-4:]
+
+        # TODO Restore img_gen
+        #out_imgs = self.img_gen(trf_out)
+        out_imgs = image_vector.reshape(
+            image_vector.shape[0] * image_vector.shape[1],
+            self.data_options.n_channels, 
+            self.data_options.img_w, 
+            self.data_options.img_h
+        )
+
+        return out_imgs, image_vector, bbox
+
+
 
 class YTID(pl.LightningModule):
     
     def __init__(self,
-                feature_extractor,
-                embedding,
-                pos_enc,
-                img_gen,
-                disc,
+                feature_extractor: nn.Module,
+                img_transformer: nn.Module,
+                disc: nn.Module,
                 args,
                 criterion):
         super(YTID, self).__init__()
         self.automatic_optimization = False # disable automatic calling of backward()
         self.max_seq_len = args.model.max_seq_len
         self.feature_extractor = feature_extractor
-        self.pos_enc = pos_enc
-        self.embedding = embedding
         self.criterion = criterion
 
         # Variables for logging
@@ -93,75 +165,23 @@ class YTID(pl.LightningModule):
         self.args = args
         
         # Transformer
-        self.transformer = Transformer(
-            args.model.emb_size,
-            args.model.n_heads,
-            args.model.n_layers,
-            args.model.n_layers,
-            args.model.ff_dim,
-            args.model.dropout,
-        )
-
-        self.img_gen = img_gen
+        self.img_transformer = img_transformer
         self.discriminator = disc
 
         # self.init_weights()
 
-    def forward(self, src, targets, src_key_padding_mask=None, tgt_key_padding_mask=None):
+    def forward(self, src, targets):
 
-        r"""Take in and process masked source/target sequences.
-
-        Args:
-            src/tgt: the sequence to the encoder/decoder (required).
-            [src/tgt]_mask: the additive mask for the src/tgt sequence (optional).
-            memory_mask: the additive mask for the encoder output (optional).
-            [src/tgt]_key_padding_mask: the ByteTensor mask for src/tgt keys per batch (optional).
-            memory_key_padding_mask: the ByteTensor mask for memory keys per batch (optional).
-
-        Shape:
-            - src: :math:`(S, N, E)`, `(N, S, E)` if batch_first.
-            - tgt: :math:`(T, N, E)`, `(N, T, E)` if batch_first.
-            - src_mask: :math:`(S, S)`.
-            - tgt_mask: :math:`(T, T)`.
-            - memory_mask: :math:`(T, S)`.
-            - src_key_padding_mask: :math:`(N, S)`.
-            - tgt_key_padding_mask: :math:`(N, T)`.
-            - memory_key_padding_mask: :math:`(N, S)`.
-        """
-
-        # Create input embeddings
-        in_seq = self.embedding(src.int())* math.sqrt(self.args.model.emb_size)
-        in_seq = self.pos_enc(in_seq)
-
-        # Forward transformer
-        in_seq = in_seq.to(self.args.device)
-        targets = targets.to(self.args.device)
-        tgt_mask = self.transformer.generate_square_subsequent_mask(targets.shape[0]).to(self.args.device)
-        trf_out = self.transformer(in_seq, targets, tgt_mask=tgt_mask)
-        image_vector = trf_out[:,:,:-4]
-        bbox = trf_out[:,:,-4:]
-
-        # TODO Restore img_gen
-        #out_imgs = self.img_gen(trf_out)
-        out_imgs = image_vector.reshape(
-            image_vector.shape[0] * image_vector.shape[1],
-            self.args.data_loader.n_channels, 
-            self.args.data_loader.img_w, 
-            self.args.data_loader.img_h
-        )
+        out_imgs, image_vector, bbox = self.img_transformer(src, targets)
 
         return out_imgs, image_vector, bbox
 
-    def make_src_mask(self, src):
-        src_mask = src.transpose(0, 1) == self.src_pad_idx
-
-        # (N, src_len)
-        return src_mask.to(self.device)
+    
 
     def training_step(self, batch, batch_idx, optimizer_idx):
 
         # Define Optimizers
-        g_opt, d_opt, t_opt, b_opt = self.optimizers()
+        d_opt, t_opt = self.optimizers()
 
         # Data loading
         original_images, labels = batch
@@ -173,7 +193,7 @@ class YTID(pl.LightningModule):
         # tgt = [<SOS>, [embeddings], <EOS> (, [<PAD>] ) ]
         # TODO Wrap in function
         in_seq = labels.reshape(self.args.model.seq_bs, self.args.model.seq_len)
-        in_seq = process_labels(labels)
+        in_seq = process_labels(in_seq)
         
         # d_loss = self.discriminator_step(in_seq, targets, tgt_imgs)
 
@@ -195,13 +215,11 @@ class YTID(pl.LightningModule):
         t_loss, box_loss = self.transformer_step(in_seq, targets)
 
         t_opt.zero_grad()
-        b_opt.zero_grad()
         self.manual_backward(t_loss, retain_graph=True)
         self.manual_backward(box_loss)
 
         #g_opt.step()
         t_opt.step()
-        b_opt.step()
 
         self.log_dict({'t_loss': t_loss, "box_loss": box_loss}, prog_bar=True)
 
@@ -325,18 +343,16 @@ class YTID(pl.LightningModule):
 
     def configure_optimizers(self):
         # FIXME Fix optimizers
-        g_optimizer = torch.optim.Adam(self.transformer.parameters(), lr=self.args.model.g_lr)
+        #g_optimizer = torch.optim.Adam(self.img_gen.parameters(), lr=self.args.model.g_lr)
         d_optimizer = torch.optim.Adam(self.discriminator.parameters(), lr=self.args.model.d_lr)
-        t_optimizer = torch.optim.Adam(self.transformer.parameters(), lr=self.args.model.t_lr)
-        b_optimizer = torch.optim.Adam(self.transformer.parameters(), lr=self.args.model.t_lr)
+        t_optimizer = torch.optim.Adam(self.img_transformer.parameters(), lr=self.args.model.t_lr)
 
-        g_scheduler = torch.optim.lr_scheduler.StepLR(g_optimizer, 1.0, gamma=0.95)
+        #g_scheduler = torch.optim.lr_scheduler.StepLR(g_optimizer, 1.0, gamma=0.95)
         d_scheduler = torch.optim.lr_scheduler.StepLR(d_optimizer, 1.0, gamma=0.95)
         t_scheduler = torch.optim.lr_scheduler.StepLR(t_optimizer, 1.0, gamma=0.95)
-        b_scheduler = torch.optim.lr_scheduler.StepLR(b_optimizer, 1.0, gamma=0.95)
 
 
-        return [g_optimizer, d_optimizer, t_optimizer, b_optimizer], [g_scheduler, d_scheduler, t_scheduler, b_scheduler]
+        return [d_optimizer, t_optimizer], [d_scheduler, t_scheduler]
 
 
 
