@@ -44,18 +44,10 @@ def img_to_PIL(img):
     img_array = np.transpose(img.numpy(), (1,2,0))
     norm_img = (img_array - img_array.min()) / (img_array.max() - img_array.min()) * 255
     PIL_image = Image.fromarray(norm_img.astype('uint8'), 'RGB')
-    return norm_img
-    # plt.imshow(np.transpose(img.numpy(), (1,2,0)), cmap="gray", interpolation='nearest')
-    #image = plt.imshow(img_array, interpolation='nearest')
-    #plt.show()
-    #return PIL_image, img_array
+    return norm_img, PIL_image
 
 
 def log_prediction(gt, tgt_box, pred, box, logger, nrow=16, title : str = "Logged Image"):
-    # h, w = hp['img_h'], hp['img_w']
-
-    # gt = gt.view(hp['seq_len'] * hp['t_bs'], 1, h * int(math.sqrt(hp['seq_len'])), w * int(math.sqrt(hp['seq_len']))) # Reshape to [B,C,H,W]
-    # pred = pred.view(hp['seq_len'] * hp['t_bs'], 1, h * int(math.sqrt(hp['seq_len'])), w * int(math.sqrt(hp['seq_len']))) # Reshape to [B,C,H,W]
 
     resize = T.Resize((64,64))
     gt = resize(gt)
@@ -63,8 +55,8 @@ def log_prediction(gt, tgt_box, pred, box, logger, nrow=16, title : str = "Logge
     gt_grid = make_grid(gt.cpu(), nrow=nrow, padding=16)
     p_grid = make_grid(pred.cpu(), nrow=nrow, padding=16)
 
-    gt_img = img_to_PIL(gt_grid)
-    p_img = img_to_PIL(p_grid)
+    gt_img, _ = img_to_PIL(gt_grid)
+    p_img, _ = img_to_PIL(p_grid)
 
     wandb.log({title :[
         wandb.Image(p_grid, caption="Prediction"),

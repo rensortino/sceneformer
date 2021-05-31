@@ -1,7 +1,8 @@
 import math
 import json
 import torch
-from ytid import YTID, ImageGenerator, PositionalEncoding, ImageTransformer
+from ytid import YTID
+from layers import ImageGenerator, PositionalEncoding, ImageTransformer
 import numpy as np
 from attrdict import AttrDict
 from log_utils import Logging
