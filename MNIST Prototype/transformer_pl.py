@@ -79,7 +79,7 @@ def main(args):
 
     wandb.init(
         config=hparams,
-        mode="disabled"
+        #mode="disabled"
     )
 
     wandb.run.name = "MNIST Without adversarial"

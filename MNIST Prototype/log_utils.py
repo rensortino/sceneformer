@@ -51,7 +51,7 @@ def img_to_PIL(img):
     #return PIL_image, img_array
 
 
-def log_prediction(gt, pred, logger, nrow=16, title : str = "Logged Image"):
+def log_prediction(gt, tgt_box, pred, box, logger, nrow=16, title : str = "Logged Image"):
     # h, w = hp['img_h'], hp['img_w']
 
     # gt = gt.view(hp['seq_len'] * hp['t_bs'], 1, h * int(math.sqrt(hp['seq_len'])), w * int(math.sqrt(hp['seq_len']))) # Reshape to [B,C,H,W]

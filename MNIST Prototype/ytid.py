@@ -122,6 +122,7 @@ class ImageTransformer(nn.Module):
         # Create input embeddings
         in_seq = self.embedding(src.int())* math.sqrt(self.emb_size)
         in_seq = self.pos_enc(in_seq)
+        targets = self.pos_enc(targets)
 
         # Forward transformer
         in_seq = in_seq.to(self.device)
@@ -157,6 +158,8 @@ class YTID(pl.LightningModule):
         self.max_seq_len = args.model.max_seq_len
         self.feature_extractor = feature_extractor
         self.criterion = criterion
+        # TODO Parametrize
+        self.classifier = nn.Linear(args.model.emb_size - 4, 13)
 
         # Variables for logging
         self.train_step = 1
@@ -186,14 +189,6 @@ class YTID(pl.LightningModule):
         # Data loading
         original_images, labels = batch
         images = original_images.view(self.args.model.seq_len, self.args.model.seq_bs, self.args.data_loader.n_channels, self.args.data_loader.img_h, self.args.data_loader.img_w)
-
-        targets, tgt_imgs = get_targets(self.feature_extractor, images)
-        #padded_tgt = get_padded_tgt(targets)
-
-        # tgt = [<SOS>, [embeddings], <EOS> (, [<PAD>] ) ]
-        # TODO Wrap in function
-        in_seq = labels.reshape(self.args.model.seq_bs, self.args.model.seq_len)
-        in_seq = process_labels(in_seq)
         
         # d_loss = self.discriminator_step(in_seq, targets, tgt_imgs)
 
@@ -212,23 +207,16 @@ class YTID(pl.LightningModule):
         # g_opt.zero_grad()
         # self.manual_backward(g_loss, retain_graph=True)
 
-        t_loss, box_loss = self.transformer_step(in_seq, targets)
+        t_loss = self.transformer_step(labels, images)
 
         t_opt.zero_grad()
-        self.manual_backward(t_loss, retain_graph=True)
-        self.manual_backward(box_loss)
+        self.manual_backward(t_loss)
 
         #g_opt.step()
         t_opt.step()
 
-        self.log_dict({'t_loss': t_loss, "box_loss": box_loss}, prog_bar=True)
+        self.log_dict({'t_loss': t_loss}, prog_bar=True)
 
-
-        #TODO Wrap in function
-        self.train_step += 1
-        if self.global_step % self.args.trainer.log_every_n_steps == 0:
-            target_imgs = tgt_imgs.view(tgt_imgs.shape[0] * tgt_imgs.shape[1], self.args.data_loader.n_channels, tgt_imgs.shape[3], tgt_imgs.shape[4])
-            log_prediction(target_imgs, self.predictions, self.logger, title="Train Transformer Target and Ouptut")
 
     def discriminator_step(self, in_seq, targets, tgt_imgs):
         ##########################
@@ -279,10 +267,18 @@ class YTID(pl.LightningModule):
         #self.log_dict({'t_loss': mse_loss, 'g_loss': t_adv_loss, 'd_loss': d_loss, 'd_real_loss': real_loss, 'd_fake_loss': fake_loss}, prog_bar=True)
         return g_loss
 
-    def transformer_step(self, in_seq, targets):
+    def transformer_step(self, labels, images):
         ########################
         # Optimize Transformer #
         ########################
+
+        targets, tgt_imgs = get_targets(self.feature_extractor, images)
+        #padded_tgt = get_padded_tgt(targets)
+
+        # tgt = [<SOS>, [embeddings], <EOS> (, [<PAD>] ) ]
+        # TODO Wrap in function
+        in_seq = labels.reshape(self.args.model.seq_bs, self.args.model.seq_len)
+        in_seq = process_labels(in_seq)
 
         # TODO Check if processed input is the same as original input (no alteration has been done)
         self.predictions, image_vectors, bbox = self(in_seq, targets[:-1])
@@ -290,26 +286,46 @@ class YTID(pl.LightningModule):
         tgt_vectors = targets[:,:,:-4]
         tgt_bboxes = targets[:,:,-4:]
 
+        # TODO Parametrize
+        # out_imgs = tgt_vectors[1:].reshape(-1, 1024).to(self.args.device)
+        # logits = self.classifier(out_imgs)
+        # t_loss = self.classification_loss(nn.CrossEntropyLoss(), logits, in_seq[1:])
+        
         # tgt[1:] (shifted left to compare the real sequences, without the <SOS>)
-        t_loss = self.transformer_loss(self.criterion, image_vectors, tgt_vectors[1:])
+        t_loss = self.reconstruction_loss(self.criterion, image_vectors, tgt_vectors[1:])
         # Exclude SOS and EOS
-        box_loss = self.transformer_loss(self.criterion, bbox[:-1], tgt_bboxes[1:-1])
+        box_loss = self.reconstruction_loss(self.criterion, bbox[:-1], tgt_bboxes[1:-1])
 
         # Compute loss
         wandb.log({"t_loss": t_loss})
         wandb.log({"box_loss": box_loss})
 
-        return  t_loss, box_loss
+        #TODO Wrap in function
+        self.train_step += 1
+        if self.global_step % self.args.trainer.log_every_n_steps == 0:
+            target_imgs = tgt_imgs.view(tgt_imgs.shape[0] * tgt_imgs.shape[1], self.args.data_loader.n_channels, tgt_imgs.shape[3], tgt_imgs.shape[4])
+            tgt_boxes = tgt_bboxes[1:-1].reshape(-1, 4)
+            boxes = bbox[:-1].reshape(-1, 4)
+            log_prediction(target_imgs, tgt_boxes, self.predictions, boxes, self.logger, title="Train Transformer Target and Ouptut")
+
+        return  t_loss + box_loss
 
     def adversarial_loss(self, y_hat, y):
         return F.binary_cross_entropy(y_hat, y)
 
-    def transformer_loss(self, criterion,  outputs, targets):
+    def reconstruction_loss(self, criterion,  outputs, targets):
 
         targets = targets.reshape(targets.shape[0] * targets.shape[1], -1).to(self.args.device)
         outputs = outputs.reshape(targets.shape).to(self.args.device)
 
         loss = criterion(outputs, targets)        
+        return loss
+
+    def classification_loss(self, criterion, outputs, targets):
+
+        targets = targets.reshape(-1)
+
+        loss = criterion(outputs, targets)
         return loss 
 
     def custom_histogram_adder(self):
