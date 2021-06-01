@@ -1,6 +1,7 @@
 import math
 from torch import nn
 import torch
+import torchvision.transforms as T
 
 
 class ImageGenerator(nn.Module):
@@ -112,16 +113,17 @@ class ImageTransformer(nn.Module):
         tgt_mask = self.transformer.generate_square_subsequent_mask(targets.shape[0]).to(self.device)
         trf_out = self.transformer(in_seq, targets, tgt_mask=tgt_mask)
         image_vector = trf_out[:,:,:-4]
-        bbox = trf_out[:,:,-4:]
+        #bbox = trf_out[:,:,-4:]
 
         # TODO Restore img_gen
         #out_imgs = self.img_gen(trf_out)
-        out_imgs = image_vector.reshape(
-            image_vector.shape[0] * image_vector.shape[1],
-            self.data_options.n_channels, 
-            self.data_options.img_w, 
-            self.data_options.img_h
-        )
+        # out_imgs = image_vector.reshape(
+        #     image_vector.shape[0] * image_vector.shape[1],
+        #     self.data_options.n_channels, 
+        #     self.data_options.img_w, 
+        #     self.data_options.img_h
+        # )
 
-        return out_imgs, image_vector, bbox
+        return trf_out
+        #return out_imgs, image_vector, bbox
 

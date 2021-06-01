@@ -1,5 +1,6 @@
 import torch
 from torchvision.utils import make_grid
+import torch.nn.functional as F
 
 TOKENS = {
         "SOS": 0.0,
@@ -40,6 +41,7 @@ def get_targets(feature_extractor, images):
     tgt_vectors = torch.tensor(tgt_list)
 
     return tgt_vectors.permute(1,0,2), tgt_images
+
 
 def process_labels(labels):
     '''

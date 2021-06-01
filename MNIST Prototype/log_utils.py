@@ -46,6 +46,18 @@ def img_to_PIL(img):
     PIL_image = Image.fromarray(norm_img.astype('uint8'), 'RGB')
     return norm_img, PIL_image
 
+def save_weights(model):
+    state_dict = {}
+    for key in model.state_dict():
+        state_dict[key] = model.state_dict()[key].clone()
+    return state_dict
+
+def compare_weights(old_state_dict, new_state_dict):
+    for key in old_state_dict:
+        if not (old_state_dict[key].cpu() == new_state_dict[key].cpu()).all():
+            print('Diff in {}'.format(key))
+        else:
+            print('No update')
 
 def log_prediction(gt, tgt_box, pred, box, logger, nrow=16, title : str = "Logged Image"):
 
