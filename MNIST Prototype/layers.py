@@ -102,9 +102,10 @@ class ImageTransformer(nn.Module):
             memory_key_padding_mask: the ByteTensor mask for memory keys per batch (optional). Shape: (N, S)
         """
 
-        # Create input embeddings
+        # Create input and target embeddings
         in_seq = self.embedding(src.int())* math.sqrt(self.emb_size)
         in_seq = self.pos_enc(in_seq)
+        targets = self.embedding(targets.int())
         targets = self.pos_enc(targets)
 
         # Forward transformer

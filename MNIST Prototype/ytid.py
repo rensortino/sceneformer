@@ -29,7 +29,8 @@ class YTID(pl.LightningModule):
         self.feature_extractor = feature_extractor
         self.criterion = criterion
         # TODO Parametrize
-        self.classifier = nn.Linear(args.model.emb_size - 4, 13)
+        # self.classifier = nn.Linear(args.model.emb_size - 4, 13)
+        self.classifier = nn.Linear(args.model.emb_size, 13)
 
         # Variables for logging
         self.train_step = 1
@@ -55,6 +56,9 @@ class YTID(pl.LightningModule):
 
     def training_step(self, batch, batch_idx, optimizer_idx):
 
+        # TODO Parametrize
+        log_weights_change = False
+
         # Define Optimizers
         d_opt, t_opt = self.optimizers()
 
@@ -62,7 +66,8 @@ class YTID(pl.LightningModule):
         original_images, labels = batch
         images = original_images.view(self.args.model.seq_len, self.args.model.seq_bs, self.args.data_loader.n_channels, self.args.data_loader.img_h, self.args.data_loader.img_w)
 
-        old_weights = save_weights(self.img_transformer)
+        if log_weights_change:
+            old_weights = save_weights(self.img_transformer)
         
         # d_loss = self.discriminator_step(in_seq, targets, tgt_imgs)
 
@@ -89,9 +94,9 @@ class YTID(pl.LightningModule):
         #g_opt.step()
         t_opt.step()
 
-        new_weights = save_weights(self.img_transformer)
-
-        compare_weights(old_weights, new_weights)
+        if log_weights_change:
+            new_weights = save_weights(self.img_transformer)
+            compare_weights(old_weights, new_weights)
 
         self.log_dict({'t_loss': t_loss}, prog_bar=True)
 
@@ -129,9 +134,9 @@ class YTID(pl.LightningModule):
         return real_loss + fake_loss
 
     def generator_step(self, tgt_imgs, targets):
-        ######################
+        # #####################
         # Optimize Generator #
-        ######################
+        # #####################
 
         # adversarial loss is binary cross-entropy
         sl, bs, c, h, w = tgt_imgs.shape
@@ -158,12 +163,13 @@ class YTID(pl.LightningModule):
         in_seq = labels.reshape(self.args.model.seq_bs, self.args.model.seq_len)
         in_seq = process_labels(in_seq)
 
-        one_hot_targets = F.one_hot(in_seq, 16)
+        one_hot_targets = F.one_hot(in_seq, 16).float()
 
         # TODO Check if processed input is the same as original input (no alteration has been done)
         # self.predictions, image_vectors, bbox = self(in_seq, targets[:-1])
 
         out = self(in_seq, one_hot_targets[:-1])
+        logits = self.classifier(out)
         # self.predictions, image_vectors, bbox = self(in_seq, one_hot_targets[:-1])
 
         # tgt_vectors = targets[:,:,:-4]
@@ -176,7 +182,7 @@ class YTID(pl.LightningModule):
         
         # tgt[1:] (shifted left to compare the real sequences, without the <SOS>)
         # t_loss = self.reconstruction_loss(self.criterion, image_vectors, tgt_vectors[1:])
-        t_loss = self.reconstruction_loss(self.criterion, out, one_hot_targets[1:])
+        t_loss = self.prob_match_loss(self.criterion, logits, in_seq[1:])
         # Exclude SOS and EOS
         # box_loss = self.reconstruction_loss(self.criterion, bbox[:-1], tgt_bboxes[1:-1])
 
@@ -196,6 +202,19 @@ class YTID(pl.LightningModule):
 
     def adversarial_loss(self, y_hat, y):
         return F.binary_cross_entropy(y_hat, y)
+
+    def prob_match_loss(self, criterion, outputs, targets):
+
+        # KLDIV
+        #targets = F.softmax(targets, dim=2)
+        outputs = F.log_softmax(outputs, dim=2)
+
+        targets = targets.reshape(-1)
+        outputs = outputs.reshape(-1,13)
+
+        loss = criterion(outputs, targets)
+        return loss
+
 
     def reconstruction_loss(self, criterion,  outputs, targets):
 

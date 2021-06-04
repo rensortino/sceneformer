@@ -9,8 +9,7 @@ class MNISTDataModule(pl.LightningDataModule):
     def __init__(self, args, data_dir="data"):
         super(MNISTDataModule, self).__init__()
         self.data_dir = data_dir
-        self.args = args.data_loader
-
+        self.args = args
     def prepare_data(self):
         datasets.MNIST(self.data_dir, train=True, download=True)
         datasets.MNIST(self.data_dir, train=False, download=True)
@@ -33,18 +32,19 @@ class MNISTDataModule(pl.LightningDataModule):
             self.test_dataset = datasets.MNIST(self.data_dir, train=False, transform=self.transforms)
 
     def train_dataloader(self):
-        return DataLoader(self.train_dataset, batch_size=self.args.batch_size, num_workers=0, shuffle=True, drop_last=True, pin_memory=True)
+        # TODO Parametrize
+        return DataLoader(self.train_dataset, batch_size=self.args.batch_size, num_workers=2, shuffle=True, persistent_workers=True, drop_last=True)
 
     def val_dataloader(self):
-        return DataLoader(self.val_dataset, batch_size=self.args.batch_size, num_workers=0, shuffle=False, drop_last=True, pin_memory=True)
+        return DataLoader(self.val_dataset, batch_size=self.args.batch_size, num_workers=0, shuffle=False, drop_last=True)
 
     def test_dataloader(self):
-        return DataLoader(self.test_dataset, batch_size=self.args.batch_size, num_workers=0, shuffle=False, drop_last=True, pin_memory=True)
+        return DataLoader(self.test_dataset, batch_size=self.args.batch_size, num_workers=0, shuffle=False, drop_last=True)
 
 class CIFAR10DataModule(pl.LightningDataModule):
     def __init__(self, args, data_dir="data"):
         super().__init__()
-        self.hparams = args.data_loader
+        self.hparams = args
         self.data_dir = data_dir
         self.mean = (0.4914, 0.4822, 0.4465)
         self.std = (0.2471, 0.2435, 0.2616)

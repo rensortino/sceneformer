@@ -53,11 +53,24 @@ def save_weights(model):
     return state_dict
 
 def compare_weights(old_state_dict, new_state_dict):
+    changed = {}
     for key in old_state_dict:
-        if not (old_state_dict[key].cpu() == new_state_dict[key].cpu()).all():
-            print('Diff in {}'.format(key))
+        module = key.split('.')[0]
+        if (old_state_dict[key].cpu() == new_state_dict[key].cpu()).all():
+            if module not in changed:
+                changed[module] = np.array([False])
+            else:
+                np.append(changed[module], False)
         else:
-            print('No update')
+            if module not in changed:
+                changed[module] = np.array([True])
+            else:
+                np.append(changed[module], True)
+
+    for module in changed:
+        if(changed[module].any()):
+            print(f'Module {module} changed')
+
 
 def log_prediction(gt, tgt_box, pred, box, logger, nrow=16, title : str = "Logged Image"):
 

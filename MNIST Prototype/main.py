@@ -30,26 +30,31 @@ TOKENS = {
 def main(args):
 
     assert args.model.emb_size % args.model.n_heads == 0, "Embedding size not divisible by number of heads"
-    assert args.data_loader.batch_size == args.model.seq_len * args.model.seq_bs, "Batch size is not seq_len * transformer_batch"
-
+    assert args.data_loader.batch_size % args.model.seq_len == 0, "Batch size not divisible by sequence length"
+    
+    args.model.seq_bs = args.data_loader.batch_size / args.model.seq_len
     args.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     if args.name == "MNIST":
-        data_module = MNISTDataModule(args)
+        data_module = MNISTDataModule(args.data_loader)
     elif args.name == "CIFAR10":
-        data_module = CIFAR10DataModule(args)
+        data_module = CIFAR10DataModule(args.data_loader)
 
     if args.model.loss == "mse":
         criterion = torch.nn.MSELoss()
     elif args.model.loss == "l1":
         criterion = torch.nn.L1Loss()
-
+    elif args.model.loss == "kldiv":
+        criterion = torch.nn.KLDivLoss()
+        # criterion = torch.nn.KLDivLoss(log_target=True)
+    elif args.model.loss == "xe":
+        criterion = torch.nn.CrossEntropyLoss()
 
     tb_logger = TensorBoardLogger("tb_logs", name="YTID")
     trainer = pl.Trainer(
         gpus=1,
         # fast_dev_run=True,
-        # overfit_batches=0.01, # 1% of training set used as batch to make it overfit
+        # overfit_batches=0.01, # 1% of training set used as batch to make it overfit # TODO Use this
         # limit_train_batches=0.1, # 10% of training data
         # limit_val_batches=0.1, # 10% of validation data
         num_sanity_val_steps=0,
@@ -80,7 +85,7 @@ def main(args):
 
     wandb.init(
         config=hparams,
-        #mode="disabled"
+        mode="disabled"
     )
 
     wandb.run.name = "MNIST Without adversarial"
@@ -94,6 +99,7 @@ def main(args):
     embedding = torch.nn.Embedding(args.model.num_classes + len(TOKENS), args.model.emb_size).to(args.device)
 
     img_gen = ImageGenerator(image_size, emb_size=args.model.emb_size, ngf=16, channels=args.data_loader.n_channels).to(args.device)
+    #TODO Pass as kwargs
     transformer = ImageTransformer(
             args.model.emb_size,
             args.model.n_heads,
