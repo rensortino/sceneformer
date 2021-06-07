@@ -33,7 +33,7 @@ class MNISTDataModule(pl.LightningDataModule):
 
     def train_dataloader(self):
         # TODO Parametrize
-        return DataLoader(self.train_dataset, batch_size=self.args.batch_size, num_workers=2, shuffle=True, persistent_workers=True, drop_last=True)
+        return DataLoader(self.train_dataset, batch_size=self.args.batch_size, num_workers=8, shuffle=True, persistent_workers=True, drop_last=True)
 
     def val_dataloader(self):
         return DataLoader(self.val_dataset, batch_size=self.args.batch_size, num_workers=0, shuffle=False, drop_last=True)

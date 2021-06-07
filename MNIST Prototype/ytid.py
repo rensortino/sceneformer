@@ -6,7 +6,8 @@ from torch import nn
 import torch.nn.functional as F
 import torchvision.transforms as T
 import math
-from data_processing import get_targets, append_tokens, process_labels
+from feature_extractor import ResNet18
+from data_processing import get_succession, get_targets, append_tokens, process_labels
 import wandb
 
 TOKENS = {
@@ -18,7 +19,6 @@ TOKENS = {
 class YTID(pl.LightningModule):
     
     def __init__(self,
-                feature_extractor: nn.Module,
                 img_transformer: nn.Module,
                 disc: nn.Module,
                 args,
@@ -26,11 +26,10 @@ class YTID(pl.LightningModule):
         super(YTID, self).__init__()
         self.automatic_optimization = False # disable automatic calling of backward()
         self.max_seq_len = args.model.max_seq_len
-        self.feature_extractor = feature_extractor
+        self.feature_extractor = ResNet18(args.model.fe_weights_path).to(args.device)
         self.criterion = criterion
         # TODO Parametrize
         # self.classifier = nn.Linear(args.model.emb_size - 4, 13)
-        self.classifier = nn.Linear(args.model.emb_size, 13)
 
         # Variables for logging
         self.train_step = 1
@@ -61,9 +60,12 @@ class YTID(pl.LightningModule):
 
         # Define Optimizers
         d_opt, t_opt = self.optimizers()
+        _, t_sch = self.lr_schedulers()
 
         # Data loading
         original_images, labels = batch
+        with open('batch.txt', 'w') as f:
+            f.write(f'{original_images}\n {labels}')
         images = original_images.view(self.args.model.seq_len, self.args.model.seq_bs, self.args.data_loader.n_channels, self.args.data_loader.img_h, self.args.data_loader.img_w)
 
         if log_weights_change:
@@ -91,14 +93,18 @@ class YTID(pl.LightningModule):
         t_opt.zero_grad()
         self.manual_backward(t_loss)
 
+        torch.nn.utils.clip_grad_norm_(self.img_transformer.parameters(), max_norm=1)
+
         #g_opt.step()
         t_opt.step()
+        # if self.current_epoch % 5 == 0:
+        #     t_sch.step()
 
         if log_weights_change:
             new_weights = save_weights(self.img_transformer)
             compare_weights(old_weights, new_weights)
 
-        self.log_dict({'t_loss': t_loss}, prog_bar=True)
+        self.log('t_loss', t_loss, prog_bar=True)
 
 
     def discriminator_step(self, in_seq, targets, tgt_imgs):
@@ -161,15 +167,18 @@ class YTID(pl.LightningModule):
         # tgt = [<SOS>, [embeddings], <EOS> (, [<PAD>] ) ]
         # TODO Wrap in function
         in_seq = labels.reshape(self.args.model.seq_bs, self.args.model.seq_len)
-        in_seq = process_labels(in_seq)
+        tgt_seq = get_succession(in_seq)
+        in_seq = process_labels(in_seq, 37, 38)
+        tgt_seq = process_labels(tgt_seq, 37, 38)
 
-        one_hot_targets = F.one_hot(in_seq, 16).float()
+        one_hot_targets = F.one_hot(in_seq, 512).float()
 
         # TODO Check if processed input is the same as original input (no alteration has been done)
         # self.predictions, image_vectors, bbox = self(in_seq, targets[:-1])
 
-        out = self(in_seq, one_hot_targets[:-1])
-        logits = self.classifier(out)
+        out = self(in_seq, tgt_seq[:-1])
+        with open(f'{wandb.run.name}.txt', 'w') as o:
+            o.write(f'{tgt_seq}\n\n{out.argmax(2)}\n')
         # self.predictions, image_vectors, bbox = self(in_seq, one_hot_targets[:-1])
 
         # tgt_vectors = targets[:,:,:-4]
@@ -182,7 +191,7 @@ class YTID(pl.LightningModule):
         
         # tgt[1:] (shifted left to compare the real sequences, without the <SOS>)
         # t_loss = self.reconstruction_loss(self.criterion, image_vectors, tgt_vectors[1:])
-        t_loss = self.prob_match_loss(self.criterion, logits, in_seq[1:])
+        t_loss = self.prob_match_loss(self.criterion, out, tgt_seq[1:])
         # Exclude SOS and EOS
         # box_loss = self.reconstruction_loss(self.criterion, bbox[:-1], tgt_bboxes[1:-1])
 
@@ -206,11 +215,11 @@ class YTID(pl.LightningModule):
     def prob_match_loss(self, criterion, outputs, targets):
 
         # KLDIV
-        #targets = F.softmax(targets, dim=2)
-        outputs = F.log_softmax(outputs, dim=2)
+        # targets = F.softmax(targets, dim=2)
+        # outputs = F.softmax(outputs, dim=2)
 
         targets = targets.reshape(-1)
-        outputs = outputs.reshape(-1,13)
+        outputs = outputs.reshape(-1,39)
 
         loss = criterion(outputs, targets)
         return loss
@@ -272,46 +281,3 @@ class YTID(pl.LightningModule):
 
 
         return [d_optimizer, t_optimizer], [d_scheduler, t_scheduler]
-
-
-
-
-
-
-
-
-
-
-    def transformer_step_old(self, labels, images):
-        r'''
-        Args:
-        in_seq : (In_seq_len, N_batchs, Embedding)
-        out_seq : (Out_seq_len, N_batchs, Embedding)
-        [src/tgt]_mask : what elements to attend (triangular mask)
-        [src/tgt]_key_padding_mask : what is padding (True) and what is value (False)
-
-        images shape:  [B,C,H,W]
-        '''
-        
-        # Create target images
-        targets, tgt_imgs = get_targets(self.feature_extractor, images)
-        #padded_tgt = get_padded_tgt(targets)
-
-        # tgt = [<SOS>, [embeddings], <EOS> (, [<PAD>] ) ]
-        in_seq = labels.reshape(self.args.model.seq_bs, self.args.model.seq_len)
-        in_list = append_tokens(in_seq.tolist(), TOKENS['EOS'], TOKENS['SOS'])
-        in_seq = torch.tensor(in_list, device=self.args.device)
-        out_imgs = self(in_seq, targets)
-        # ground truth result (ie: all fake)
-        # put on GPU because we created this tensor inside training_loop
-        valid = torch.ones(out_imgs.size(0), 1, device=self.args.device)
-
-        # adversarial loss is binary cross-entropy
-        g_loss = self.adversarial_loss(self.discriminator(out_imgs), valid)
-
-        # Compute loss
-        # tgt[1:] (shifted left to compare the real sequences, without the <SOS>)
-        #t_loss = self.transformer_loss(self.criterion, out_imgs, tgt_imgs)
-        self.log("g_loss", g_loss)
-        wandb.log({"g_loss": g_loss})
-        return g_loss, out_imgs, tgt_imgs

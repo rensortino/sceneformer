@@ -4,25 +4,25 @@
 
     "model": {
         "type": "Transformer",
-        "ff_dim" : 512,
-        "emb_size": 16,
+        "ff_dim" : 2048,
+        "emb_size": 512,
         "n_layers" : 4,      
         "n_heads" : 8,       
         "dropout" : 0.2,    
         "loss": "xe",
         "g_lr" : 1e-4,
         "d_lr" : 1e-4,
-        "t_lr" : 1e-1,
+        "t_lr" : 1e-6,
         "fe_weights_path": "ckpt/mnist/resnet18_nonorm.pt",
         "num_classes": 10,
         "seq_len" : 4,
         "max_seq_len": 6,
-        "seq_bs" : 64
+        "seq_bs" : 8
     },
     "data_loader": {
         "type": "MnistDataLoader",
         "data_dir": "data/",
-        "batch_size": 256,
+        "batch_size": 32,
         "img_w": 32,
         "img_h": 32,
         "n_channels": 1,

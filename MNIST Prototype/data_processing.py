@@ -8,6 +8,7 @@ TOKENS = {
         "PAD": -3
     }
 
+
 def get_targets(feature_extractor, images):
     
     '''
@@ -43,15 +44,34 @@ def get_targets(feature_extractor, images):
     return tgt_vectors.permute(1,0,2), tgt_images
 
 
-def process_labels(labels):
+def process_labels(labels, sos_token, eos_token):
     '''
     labels: [bs, seq_len]
     '''
-    sos_token = 11
-    eos_token = 12
     in_list = append_tokens(labels.tolist(), eos_token, sos_token)
     in_seq = torch.tensor(in_list, device=labels.device)
+    # Convert in transformer dimension order
     return in_seq.t()
+
+
+def get_succession(labels):
+    '''
+    labels: [bs, seq_len]
+    '''
+    successions = []
+    for seq in labels:
+        succession = []
+        for i, num in enumerate(seq):
+            if i == 0:
+                continue
+            elif i == 1:
+                succession.append(num.item() + seq[i -1].item())
+            else:
+                succession.append(num.item() + succession[i -2])
+        successions.append(succession)
+    successions = torch.tensor(successions, device=labels.device)
+    # Convert in transformer dimension order
+    return successions
 
 def get_bboxes(img_seq):
     '''

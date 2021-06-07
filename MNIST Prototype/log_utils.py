@@ -52,6 +52,12 @@ def save_weights(model):
         state_dict[key] = model.state_dict()[key].clone()
     return state_dict
 
+def get_data_stats(data):
+    print(f'Mean:\t{data.mean()}')
+    print(f'Std:\t{data.std()}')
+    print(f'Max:\t{data.max()}')
+    print(f'Min:\t{data.min()}')
+
 def compare_weights(old_state_dict, new_state_dict):
     changed = {}
     for key in old_state_dict:

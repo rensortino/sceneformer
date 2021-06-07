@@ -33,13 +33,14 @@ class ImageGenerator(nn.Module):
 
 class PositionalEncoding(nn.Module):
 
-    def __init__(self, d_model, dropout=0.1, max_len=10):
+    def __init__(self, emb_size, dropout=0.1, max_len=10):
         super(PositionalEncoding, self).__init__()
         self.dropout = nn.Dropout(p=dropout)
+        self.emb_size = emb_size
 
-        pe = torch.zeros(max_len, d_model)
+        pe = torch.zeros(max_len, emb_size)
         position = torch.arange(0, max_len, dtype=torch.float).unsqueeze(1)
-        div_term = torch.exp(torch.arange(0, d_model, 2).float() * (-math.log(10000.0) / d_model))
+        div_term = torch.exp(torch.arange(0, emb_size, 2).float() * (-math.log(10000.0) / emb_size))
         pe[:, 0::2] = torch.sin(position * div_term)
         pe[:, 1::2] = torch.cos(position * div_term)
         pe = pe.unsqueeze(0).transpose(0, 1)
@@ -47,6 +48,7 @@ class PositionalEncoding(nn.Module):
 
     def forward(self, x):
         x = x.to(self.pe.device)
+        x = x * math.sqrt(self.emb_size)
         x = x + self.pe[:x.size(0), :]
         return self.dropout(x)
 
@@ -58,11 +60,7 @@ class ImageTransformer(nn.Module):
                         ff_dim,
                         dropout,
                         data_options,
-                        device,
-                        embedding: nn.Module,
-                        img_gen: nn.Module,
-                        pos_enc: nn.Module):
-
+                        device):
         super(ImageTransformer, self).__init__()
 
         self.data_options = data_options
@@ -80,9 +78,10 @@ class ImageTransformer(nn.Module):
         self.emb_size = emb_size
         self.device = device
 
-        self.embedding = embedding
-        self.img_gen = img_gen
-        self.pos_enc = pos_enc
+        self.pos_enc = PositionalEncoding(emb_size, dropout).to(device)
+        self.src_embedding = torch.nn.Embedding(39, emb_size).to(device)
+        self.tgt_embedding = torch.nn.Embedding(39, emb_size).to(device)
+        self.fc = nn.Linear(emb_size, 39)
 
     def make_src_mask(self, src):
         src_mask = src.transpose(0, 1) == self.src_pad_idx
@@ -103,9 +102,9 @@ class ImageTransformer(nn.Module):
         """
 
         # Create input and target embeddings
-        in_seq = self.embedding(src.int())* math.sqrt(self.emb_size)
+        in_seq = self.src_embedding(src.int())
         in_seq = self.pos_enc(in_seq)
-        targets = self.embedding(targets.int())
+        targets = self.tgt_embedding(targets.int())
         targets = self.pos_enc(targets)
 
         # Forward transformer
@@ -113,6 +112,7 @@ class ImageTransformer(nn.Module):
         targets = targets.to(self.device)
         tgt_mask = self.transformer.generate_square_subsequent_mask(targets.shape[0]).to(self.device)
         trf_out = self.transformer(in_seq, targets, tgt_mask=tgt_mask)
+        out = self.fc(trf_out)
         image_vector = trf_out[:,:,:-4]
         #bbox = trf_out[:,:,-4:]
 
@@ -125,6 +125,6 @@ class ImageTransformer(nn.Module):
         #     self.data_options.img_h
         # )
 
-        return trf_out
+        return out
         #return out_imgs, image_vector, bbox
 

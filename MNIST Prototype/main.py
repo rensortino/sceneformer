@@ -8,7 +8,7 @@ from attrdict import AttrDict
 from log_utils import Logging
 
 
-from feature_extractor import ResNet18
+
 from data_modules import MNISTDataModule, CIFAR10DataModule
 
 import pytorch_lightning as pl
@@ -26,6 +26,8 @@ TOKENS = {
         "EOS": 1.0,
         "PAD": 0.5
 }
+
+
 
 def main(args):
 
@@ -54,13 +56,13 @@ def main(args):
     trainer = pl.Trainer(
         gpus=1,
         # fast_dev_run=True,
-        # overfit_batches=0.01, # 1% of training set used as batch to make it overfit # TODO Use this
+        # overfit_batches=0.00125, # 1% of training set used as batch to make it overfit # TODO Use this
         # limit_train_batches=0.1, # 10% of training data
         # limit_val_batches=0.1, # 10% of validation data
         num_sanity_val_steps=0,
         flush_logs_every_n_steps=20,
         progress_bar_refresh_rate=20,
-        #max_epochs=epochs,
+        max_epochs=300,
         #profiler=True,
         logger=tb_logger,
         callbacks=[
@@ -85,18 +87,14 @@ def main(args):
 
     wandb.init(
         config=hparams,
-        mode="disabled"
+        #mode="disabled"
     )
 
-    wandb.run.name = "MNIST Without adversarial"
+    wandb.run.name = "All batches succession - lr 1e-6"
 
     config = wandb.config
 
     image_size = (args.data_loader.img_w * int(math.sqrt(args.model.seq_len)), args.data_loader.img_h * int(math.sqrt(args.model.seq_len)))
-    
-    feature_extractor = ResNet18(args.model.fe_weights_path).to(args.device)
-    pos_enc = PositionalEncoding(args.model.emb_size, args.model.dropout).to(args.device)
-    embedding = torch.nn.Embedding(args.model.num_classes + len(TOKENS), args.model.emb_size).to(args.device)
 
     img_gen = ImageGenerator(image_size, emb_size=args.model.emb_size, ngf=16, channels=args.data_loader.n_channels).to(args.device)
     #TODO Pass as kwargs
@@ -108,13 +106,10 @@ def main(args):
             args.model.ff_dim,
             args.model.dropout,
             args.data_loader,
-            args.device,
-            embedding,
-            img_gen,
-            pos_enc
+            args.device
         ).to(args.device)
     disc = DCGANDiscriminator(image_channels=args.data_loader.n_channels).to(args.device)
-    model = YTID(feature_extractor, transformer, disc, args, criterion).to(args.device)
+    model = YTID(transformer, disc, args, criterion).to(args.device)
 
     trainer.fit(model, data_module)
     
