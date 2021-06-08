@@ -9,7 +9,7 @@ TOKENS = {
     }
 
 
-def get_targets(feature_extractor, images):
+def get_target_images(images):
     
     '''
     images shape: [seq_len, seq_batch, h, w]
@@ -27,21 +27,11 @@ def get_targets(feature_extractor, images):
     norm_boxes = torch.tensor(bboxes, device=images.device) / (h*2)
     tgt_boxes = norm_boxes.unsqueeze(0).repeat(bs,1,1)
 
+    sos_token = torch.full([1] + list(images.shape[1:]), TOKENS['SOS'], device=images.device)
     eos_token = torch.full([1] + list(images.shape[1:]), TOKENS['EOS'], device=images.device)
-    tgt_images = torch.cat((images, eos_token))
+    tgt_images = torch.cat((sos_token, images, eos_token))
 
-    # TODO Restore feature extractor
-    # with torch.no_grad():
-    #     vector_seq = feature_extractor(img_grids.detach().clone()) # [batch * seq_len, emb_size]
-    vector_seq = images.view(images.shape[0], images.shape[1], -1) # [seq_len, batch_size, emb_size]
-    vector_seq = vector_seq.permute(1,0,2) # [batch, seq_len, emb_size]
-    vector_w_boxes = torch.cat((vector_seq, tgt_boxes), dim=2)
-
-    tgt_list = append_tokens(vector_w_boxes.tolist(), TOKENS['EOS'], TOKENS['SOS'])
-
-    tgt_vectors = torch.tensor(tgt_list)
-
-    return tgt_vectors.permute(1,0,2), tgt_images
+    return tgt_images
 
 
 def process_labels(labels, sos_token, eos_token):

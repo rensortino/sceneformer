@@ -58,7 +58,7 @@ def get_data_stats(data):
     print(f'Max:\t{data.max()}')
     print(f'Min:\t{data.min()}')
 
-def compare_weights(old_state_dict, new_state_dict):
+def compare_weights(epoch, old_state_dict, new_state_dict):
     changed = {}
     for key in old_state_dict:
         module = key.split('.')[0]
@@ -66,16 +66,17 @@ def compare_weights(old_state_dict, new_state_dict):
             if module not in changed:
                 changed[module] = np.array([False])
             else:
-                np.append(changed[module], False)
+                changed[module] = np.append(changed[module], False)
         else:
             if module not in changed:
                 changed[module] = np.array([True])
             else:
-                np.append(changed[module], True)
-
-    for module in changed:
-        if(changed[module].any()):
-            print(f'Module {module} changed')
+                changed[module] = np.append(changed[module], True)
+    with open('weight_change.txt', 'a') as out:
+        out.write(f'Epoch: {epoch}\n')
+        for module in changed:
+            if(changed[module].any()):
+                out.write(f'Module {module} changed\n')
 
 
 def log_prediction(gt, tgt_box, pred, box, logger, nrow=16, title : str = "Logged Image"):

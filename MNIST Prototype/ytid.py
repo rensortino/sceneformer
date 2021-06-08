@@ -5,9 +5,7 @@ import torch
 from torch import nn
 import torch.nn.functional as F
 import torchvision.transforms as T
-import math
-from feature_extractor import ResNet18
-from data_processing import get_succession, get_targets, append_tokens, process_labels
+from data_processing import get_succession, get_target_images, append_tokens, process_labels
 import wandb
 
 TOKENS = {
@@ -26,10 +24,7 @@ class YTID(pl.LightningModule):
         super(YTID, self).__init__()
         self.automatic_optimization = False # disable automatic calling of backward()
         self.max_seq_len = args.model.max_seq_len
-        self.feature_extractor = ResNet18(args.model.fe_weights_path).to(args.device)
         self.criterion = criterion
-        # TODO Parametrize
-        # self.classifier = nn.Linear(args.model.emb_size - 4, 13)
 
         # Variables for logging
         self.train_step = 1
@@ -51,12 +46,10 @@ class YTID(pl.LightningModule):
         return out
         # return out_imgs, image_vector, bbox
 
-    
-
     def training_step(self, batch, batch_idx, optimizer_idx):
 
         # TODO Parametrize
-        log_weights_change = False
+        log_weights_change = True
 
         # Define Optimizers
         d_opt, t_opt = self.optimizers()
@@ -66,7 +59,7 @@ class YTID(pl.LightningModule):
         original_images, labels = batch
         with open('batch.txt', 'w') as f:
             f.write(f'{original_images}\n {labels}')
-        images = original_images.view(self.args.model.seq_len, self.args.model.seq_bs, self.args.data_loader.n_channels, self.args.data_loader.img_h, self.args.data_loader.img_w)
+        images = original_images.view(self.args.model.seq_len, self.args.model.seq_bs, self.args.data.n_channels, self.img_transformer.image_size[0], self.img_transformer.image_size[1])
 
         if log_weights_change:
             old_weights = save_weights(self.img_transformer)
@@ -102,7 +95,7 @@ class YTID(pl.LightningModule):
 
         if log_weights_change:
             new_weights = save_weights(self.img_transformer)
-            compare_weights(old_weights, new_weights)
+            compare_weights(self.current_epoch, old_weights, new_weights)
 
         self.log('t_loss', t_loss, prog_bar=True)
 
@@ -157,28 +150,23 @@ class YTID(pl.LightningModule):
         return g_loss
 
     def transformer_step(self, labels, images):
-        ########################
-        # Optimize Transformer #
-        ########################
 
-        # targets, tgt_imgs = get_targets(self.feature_extractor, images)
         #padded_tgt = get_padded_tgt(targets)
 
         # tgt = [<SOS>, [embeddings], <EOS> (, [<PAD>] ) ]
-        # TODO Wrap in function
-        in_seq = labels.reshape(self.args.model.seq_bs, self.args.model.seq_len)
-        tgt_seq = get_succession(in_seq)
-        in_seq = process_labels(in_seq, 37, 38)
-        tgt_seq = process_labels(tgt_seq, 37, 38)
+        labels = labels.reshape(self.args.model.seq_bs, self.args.model.seq_len)
+        in_seq = process_labels(labels, 14, 15)
+        tgt_images = get_target_images(images)
+        # tgt_seq = process_labels(labels, 37, 38)
 
-        one_hot_targets = F.one_hot(in_seq, 512).float()
+        # one_hot_targets = F.one_hot(tgt_seq, 512).float()
 
         # TODO Check if processed input is the same as original input (no alteration has been done)
         # self.predictions, image_vectors, bbox = self(in_seq, targets[:-1])
 
-        out = self(in_seq, tgt_seq[:-1])
-        with open(f'{wandb.run.name}.txt', 'w') as o:
-            o.write(f'{tgt_seq}\n\n{out.argmax(2)}\n')
+        out = self(in_seq, tgt_images[:-1])
+        with open(f'output/{wandb.run.name}.txt', 'w') as o:
+            o.write(f'Input:\t{in_seq}\n\nOutput:\t{out.argmax(2)}\n')
         # self.predictions, image_vectors, bbox = self(in_seq, one_hot_targets[:-1])
 
         # tgt_vectors = targets[:,:,:-4]
@@ -190,8 +178,8 @@ class YTID(pl.LightningModule):
         # t_loss = self.classification_loss(nn.CrossEntropyLoss(), logits, in_seq[1:])
         
         # tgt[1:] (shifted left to compare the real sequences, without the <SOS>)
-        # t_loss = self.reconstruction_loss(self.criterion, image_vectors, tgt_vectors[1:])
-        t_loss = self.prob_match_loss(self.criterion, out, tgt_seq[1:])
+        # t_loss = self.reconstruction_loss(self.criterion, out, tgt_images)
+        t_loss = self.prob_match_loss(self.criterion, out, in_seq[1:])
         # Exclude SOS and EOS
         # box_loss = self.reconstruction_loss(self.criterion, bbox[:-1], tgt_bboxes[1:-1])
 
@@ -200,12 +188,12 @@ class YTID(pl.LightningModule):
         # wandb.log({"box_loss": box_loss})
 
         #TODO Wrap in function
-        # self.train_step += 1
+        self.train_step += 1
         # if self.global_step % self.args.trainer.log_every_n_steps == 0:
-        #     target_imgs = tgt_imgs.view(tgt_imgs.shape[0] * tgt_imgs.shape[1], self.args.data_loader.n_channels, tgt_imgs.shape[3], tgt_imgs.shape[4])
-        #     tgt_boxes = tgt_bboxes[1:-1].reshape(-1, 4)
-        #     boxes = bbox[:-1].reshape(-1, 4)
-        #     log_prediction(target_imgs, tgt_boxes, self.predictions, boxes, self.logger, title="Train Transformer Target and Ouptut")
+        # target_imgs = out_imgs.view(out_imgs.shape[0] * out_imgs.shape[1], self.args.data.n_channels, out_imgs.shape[2], out_imgs.shape[3])
+        # tgt_boxes = tgt_bboxes[1:-1].reshape(-1, 4)
+        # boxes = bbox[:-1].reshape(-1, 4)
+        # log_prediction(target_imgs, tgt_boxes, self.predictions, boxes, self.logger, title="Train Transformer Target and Ouptut")
 
         return  t_loss # + box_loss
 
@@ -214,12 +202,8 @@ class YTID(pl.LightningModule):
 
     def prob_match_loss(self, criterion, outputs, targets):
 
-        # KLDIV
-        # targets = F.softmax(targets, dim=2)
-        # outputs = F.softmax(outputs, dim=2)
-
         targets = targets.reshape(-1)
-        outputs = outputs.reshape(-1,39)
+        outputs = outputs.reshape(-1,16)
 
         loss = criterion(outputs, targets)
         return loss
@@ -252,7 +236,7 @@ class YTID(pl.LightningModule):
     #    images, labels = batch
     #    images = images.unsqueeze(1) # add the transformer sequence dimension
     #    # Reshape images to seq_len, batch_size
-    #    images = images.view(self.args.model.seq_len, self.args.model.seq_bs, self.args.data_loader.n_channels, self.args.data_loader.img_h, self.args.data_loader.img_w)
+    #    images = images.view(self.args.model.seq_len, self.args.model.seq_bs, self.args.data.n_channels, self.args.data.img_h, self.args.data.img_w)
     #    step_loss, predictions, target_imgs = self.transformer_step(labels, images)
     #    
     #    # Logging
@@ -262,7 +246,7 @@ class YTID(pl.LightningModule):
 #
     #    self.val_step += 1
     #    if self.global_step % self.args.trainer.log_every_n_steps == 0:
-    #        target_imgs = target_imgs.view(target_imgs.shape[0] * target_imgs.shape[1], self.args.data_loader.n_channels, target_imgs.shape[3], target_imgs.shape[4])
+    #        target_imgs = target_imgs.view(target_imgs.shape[0] * target_imgs.shape[1], self.args.data.n_channels, target_imgs.shape[3], target_imgs.shape[4])
     #        log_prediction(target_imgs, predictions, self.logger, title="Validation Transformer Target and Ouptut")
     #    return step_loss
 #
@@ -270,10 +254,13 @@ class YTID(pl.LightningModule):
         pass
 
     def configure_optimizers(self):
-        # FIXME Fix optimizers
-        #g_optimizer = torch.optim.Adam(self.img_gen.parameters(), lr=self.args.model.g_lr)
-        d_optimizer = torch.optim.Adam(self.discriminator.parameters(), lr=self.args.model.d_lr)
-        t_optimizer = torch.optim.Adam(self.img_transformer.parameters(), lr=self.args.model.t_lr)
+        if self.args.optimizer.type == 'Adam':
+            # FIXME Fix optimizers
+            #g_optimizer = torch.optim.Adam(self.img_gen.parameters(), lr=self.args.optimizer.g_lr)
+            d_optimizer = torch.optim.Adam(self.discriminator.parameters(), lr=self.args.optimizer.d_lr)
+            t_optimizer = torch.optim.Adam(self.img_transformer.parameters(), lr=self.args.optimizer.t_lr)
+        else:
+            raise Exception(f'Optimizer {self.args.optimizer.type} not supported')
 
         #g_scheduler = torch.optim.lr_scheduler.StepLR(g_optimizer, 1.0, gamma=0.95)
         d_scheduler = torch.optim.lr_scheduler.StepLR(d_optimizer, 1.0, gamma=0.95)

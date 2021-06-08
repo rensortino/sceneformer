@@ -1,3 +1,4 @@
+from feature_extractor import ResNet18
 import math
 import json
 import torch
@@ -32,31 +33,59 @@ TOKENS = {
 def main(args):
 
     assert args.model.emb_size % args.model.n_heads == 0, "Embedding size not divisible by number of heads"
-    assert args.data_loader.batch_size % args.model.seq_len == 0, "Batch size not divisible by sequence length"
+    assert args.data.batch_size % args.model.seq_len == 0, "Batch size not divisible by sequence length"
     
-    args.model.seq_bs = args.data_loader.batch_size / args.model.seq_len
+    args.model.seq_bs = args.data.batch_size / args.model.seq_len
     args.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    # image_size = (args.data.img_w * int(math.sqrt(args.model.seq_len)), args.data.img_h * int(math.sqrt(args.model.seq_len)))
+    image_size = (args.data.img_w, args.data.img_h)
 
     if args.name == "MNIST":
-        data_module = MNISTDataModule(args.data_loader)
+        data_module = MNISTDataModule(args.data, image_size)
     elif args.name == "CIFAR10":
-        data_module = CIFAR10DataModule(args.data_loader)
+        data_module = CIFAR10DataModule(args.data)
 
-    if args.model.loss == "mse":
+    if args.loss == "mse":
         criterion = torch.nn.MSELoss()
-    elif args.model.loss == "l1":
+    elif args.loss == "l1":
         criterion = torch.nn.L1Loss()
-    elif args.model.loss == "kldiv":
+    elif args.loss == "kldiv":
         criterion = torch.nn.KLDivLoss()
         # criterion = torch.nn.KLDivLoss(log_target=True)
-    elif args.model.loss == "xe":
+    elif args.loss == "xe":
         criterion = torch.nn.CrossEntropyLoss()
 
-    tb_logger = TensorBoardLogger("tb_logs", name="YTID")
+    # Config WandB Logging
+    wandb.login()
+
+    hparams = dict(
+        nhid = args.model.ff_dim, # the dimension of the feedforward network model in nn.TransformerEncoder
+        nlayers = args.model.n_layers, # the number of nn.TransformerEncoderLayer in nn.TransformerEncoder
+        nheads = args.model.n_heads, # the number of heads in the multiheadattention models
+        dropout = args.model.dropout, # the dropout value
+        g_lr = args.optimizer.g_lr,
+        d_lr = args.optimizer.d_lr,
+        t_lr = args.optimizer.t_lr,
+        emb_size = args.model.emb_size,
+        img_h = args.data.img_h,
+        img_w = args.data.img_w,
+    )
+
+    wandb.init(
+        config=hparams,
+        mode="disabled"
+    )
+
+    wandb.run.name = "Testing one batch - image embedding with generator"
+
+    config = wandb.config
+
+    tb_logger = TensorBoardLogger("tb_logs", name="YTID", version=wandb.run.name)
+
     trainer = pl.Trainer(
         gpus=1,
         # fast_dev_run=True,
-        # overfit_batches=0.00125, # 1% of training set used as batch to make it overfit # TODO Use this
+        overfit_batches=0.000625, # 1% of training set used as batch to make it overfit
         # limit_train_batches=0.1, # 10% of training data
         # limit_val_batches=0.1, # 10% of validation data
         num_sanity_val_steps=0,
@@ -70,34 +99,8 @@ def main(args):
         ]
     )
 
-    wandb.login()
-
-    hparams = dict(
-        nhid = args.model.ff_dim, # the dimension of the feedforward network model in nn.TransformerEncoder
-        nlayers = args.model.n_layers, # the number of nn.TransformerEncoderLayer in nn.TransformerEncoder
-        nheads = args.model.n_heads, # the number of heads in the multiheadattention models
-        dropout = args.model.dropout, # the dropout value
-        g_lr = args.model.g_lr,
-        d_lr = args.model.d_lr,
-        t_lr = args.model.t_lr,
-        emb_size = args.model.emb_size,
-        img_h = args.data_loader.img_h,
-        img_w = args.data_loader.img_w,
-    )
-
-    wandb.init(
-        config=hparams,
-        #mode="disabled"
-    )
-
-    wandb.run.name = "All batches succession - lr 1e-6"
-
-    config = wandb.config
-
-    image_size = (args.data_loader.img_w * int(math.sqrt(args.model.seq_len)), args.data_loader.img_h * int(math.sqrt(args.model.seq_len)))
-
-    img_gen = ImageGenerator(image_size, emb_size=args.model.emb_size, ngf=16, channels=args.data_loader.n_channels).to(args.device)
     #TODO Pass as kwargs
+    feature_extractor = ResNet18(args.model.fe_weights_path)
     transformer = ImageTransformer(
             args.model.emb_size,
             args.model.n_heads,
@@ -105,10 +108,12 @@ def main(args):
             args.model.n_layers,
             args.model.ff_dim,
             args.model.dropout,
-            args.data_loader,
-            args.device
+            args.data,
+            image_size,
+            args.device,
+            feature_extractor
         ).to(args.device)
-    disc = DCGANDiscriminator(image_channels=args.data_loader.n_channels).to(args.device)
+    disc = DCGANDiscriminator(image_channels=args.data.n_channels).to(args.device)
     model = YTID(transformer, disc, args, criterion).to(args.device)
 
     trainer.fit(model, data_module)

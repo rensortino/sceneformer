@@ -6,10 +6,11 @@ import torchvision.transforms as T
 
 class MNISTDataModule(pl.LightningDataModule):
 
-    def __init__(self, args, data_dir="data"):
+    def __init__(self, args, image_size, data_dir="data"):
         super(MNISTDataModule, self).__init__()
         self.data_dir = data_dir
         self.args = args
+        self.image_size = image_size
     def prepare_data(self):
         datasets.MNIST(self.data_dir, train=True, download=True)
         datasets.MNIST(self.data_dir, train=False, download=True)
@@ -17,9 +18,8 @@ class MNISTDataModule(pl.LightningDataModule):
     def setup(self, stage=None):
         mnist = datasets.MNIST(download=False, train=True, root="data").data.float()
         self.transforms = T.Compose([ 
-            T.Resize((self.args.img_h, self.args.img_w)),
-            T.ToTensor(),
-            #T.Normalize((mnist.mean()/255,), (mnist.std()/255,))
+            T.Resize((self.image_size)),
+            T.ToTensor()
         ])
 
         # Assign train/val datasets for use in dataloaders
@@ -32,14 +32,13 @@ class MNISTDataModule(pl.LightningDataModule):
             self.test_dataset = datasets.MNIST(self.data_dir, train=False, transform=self.transforms)
 
     def train_dataloader(self):
-        # TODO Parametrize
-        return DataLoader(self.train_dataset, batch_size=self.args.batch_size, num_workers=8, shuffle=True, persistent_workers=True, drop_last=True)
+        return DataLoader(self.train_dataset, batch_size=self.args.batch_size, num_workers=self.args.num_workers, shuffle=True, persistent_workers=self.args.persistent_workers, drop_last=True)
 
     def val_dataloader(self):
-        return DataLoader(self.val_dataset, batch_size=self.args.batch_size, num_workers=0, shuffle=False, drop_last=True)
+        return DataLoader(self.val_dataset, batch_size=self.args.batch_size, num_workers=self.args.num_workers, shuffle=False, drop_last=True)
 
     def test_dataloader(self):
-        return DataLoader(self.test_dataset, batch_size=self.args.batch_size, num_workers=0, shuffle=False, drop_last=True)
+        return DataLoader(self.test_dataset, batch_size=self.args.batch_size, num_workers=self.args.num_workers, shuffle=False, drop_last=True)
 
 class CIFAR10DataModule(pl.LightningDataModule):
     def __init__(self, args, data_dir="data"):
@@ -77,8 +76,7 @@ class CIFAR10DataModule(pl.LightningDataModule):
             batch_size=self.hparams.batch_size,
             num_workers=self.hparams.num_workers,
             shuffle=True,
-            drop_last=True,
-            pin_memory=True,
+            drop_last=True
         )
         return dataloader
 

@@ -2,6 +2,7 @@ import math
 from torch import nn
 import torch
 import torchvision.transforms as T
+from feature_extractor import ResNet18
 
 
 class ImageGenerator(nn.Module):
@@ -60,7 +61,9 @@ class ImageTransformer(nn.Module):
                         ff_dim,
                         dropout,
                         data_options,
-                        device):
+                        image_size,
+                        device,
+                        feature_extractor):
         super(ImageTransformer, self).__init__()
 
         self.data_options = data_options
@@ -78,10 +81,17 @@ class ImageTransformer(nn.Module):
         self.emb_size = emb_size
         self.device = device
 
+        self.image_size = image_size
+        self.img_gen = ImageGenerator(image_size, emb_size=self.emb_size, ngf=16, channels=self.data_options.n_channels).to(self.device)
+
+        src_vocab_size = 16
+        tgt_vocab_size = 16
+
         self.pos_enc = PositionalEncoding(emb_size, dropout).to(device)
-        self.src_embedding = torch.nn.Embedding(39, emb_size).to(device)
-        self.tgt_embedding = torch.nn.Embedding(39, emb_size).to(device)
-        self.fc = nn.Linear(emb_size, 39)
+        self.src_embedding = torch.nn.Embedding(src_vocab_size, emb_size).to(device)
+        # self.tgt_embedding = torch.nn.Embedding(tgt_vocab_size, emb_size).to(device)
+        self.tgt_embedding = feature_extractor
+        self.fc = nn.Linear(emb_size, tgt_vocab_size).to(device)
 
     def make_src_mask(self, src):
         src_mask = src.transpose(0, 1) == self.src_pad_idx
@@ -102,29 +112,39 @@ class ImageTransformer(nn.Module):
         """
 
         # Create input and target embeddings
-        in_seq = self.src_embedding(src.int())
-        in_seq = self.pos_enc(in_seq)
-        targets = self.tgt_embedding(targets.int())
+        src = self.src_embedding(src.int())
+        src = self.pos_enc(src)
+
+        seq_len, bs = targets.shape[0], targets.shape[1]
+
+        targets = targets.reshape(-1, self.data_options.n_channels, self.image_size[0], self.image_size[1])
+        with torch.no_grad():
+            targets = self.tgt_embedding(targets)
+        targets = targets.reshape(seq_len, bs, -1)
         targets = self.pos_enc(targets)
 
         # Forward transformer
-        in_seq = in_seq.to(self.device)
+        src = src.to(self.device)
         targets = targets.to(self.device)
-        tgt_mask = self.transformer.generate_square_subsequent_mask(targets.shape[0]).to(self.device)
-        trf_out = self.transformer(in_seq, targets, tgt_mask=tgt_mask)
+        tgt_mask = self.transformer.generate_square_subsequent_mask(seq_len).to(self.device)
+        trf_out = self.transformer(src, targets, tgt_mask=tgt_mask)
         out = self.fc(trf_out)
-        image_vector = trf_out[:,:,:-4]
+        # image_vector = trf_out[:,:,:-4]
         #bbox = trf_out[:,:,-4:]
 
         # TODO Restore img_gen
-        #out_imgs = self.img_gen(trf_out)
-        # out_imgs = image_vector.reshape(
-        #     image_vector.shape[0] * image_vector.shape[1],
+        # out_imgs = self.img_gen(trf_out)
+        # with torch.no_grad():
+        #     out_vectors = self.tgt_embedding(out_imgs)
+        # TODO Change with Resnet linear
+        # out = self.fc(out_vectors)
+        # out_imgs = out_imgs.reshape(
+        #     out_imgs.shape[0] * out_imgs.shape[1],
         #     self.data_options.n_channels, 
         #     self.data_options.img_w, 
         #     self.data_options.img_h
         # )
 
-        return out
+        return out#, out_imgs
         #return out_imgs, image_vector, bbox
 

@@ -12,6 +12,7 @@ class ResNet18(nn.Module):
         elif "cifar" in w_path:
             self.model.conv1 = nn.Conv2d(3, 64, kernel_size=3, stride=1, padding=1, bias=False)
         self.model.load_state_dict(torch.load(w_path))
+        self.linear = self.model.fc
         self.out_layer = self.model._modules.get('avgpool')
         self.embedding_size = self.model.fc.in_features
         self.model.fc = nn.Identity()
