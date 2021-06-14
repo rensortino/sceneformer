@@ -1,15 +1,10 @@
 import torch
 from torchvision.utils import make_grid
 import torch.nn.functional as F
-
-TOKENS = {
-        "SOS": 0.0,
-        "EOS": 1.0,
-        "PAD": -3
-    }
+import numpy as np
 
 
-def get_target_images(images):
+def get_target_images(images, TOKENS):
     
     '''
     images shape: [seq_len, seq_batch, h, w]
@@ -103,6 +98,9 @@ def get_img_grids(img_seq, n_channels):
     return torch.cat(img_grids).tolist()
     # img_grids = pad_sequence(img_grids, 6, torch.zeros(img_grids[0].shape))
 
+def get_one_hot(labels):
+    return F.one_hot(labels, 512).float()
+    
 def append_tokens(sequences, eos_token, sos_token=None):
 
     out_seq = []
@@ -153,3 +151,26 @@ def pad_sequence(seq, max_seq_len):
         padded_seq = seq.tolist() + [torch.full([seq.shape[1]], TOKENS['PAD']) for _ in range(max_seq_len - len(seq))]
 
         return padded_seq
+
+
+def build_vocab(feature_extractor, dataloader, tokens, vocab_size=16):
+    vocab_list = [torch.zeros(1,512) for i in range(vocab_size)]
+    for images, labels in dataloader:
+
+        with torch.no_grad():
+            feature_vecs = feature_extractor(images.cuda(), True).cpu()
+        
+        for i, label in enumerate(labels):
+            vocab_list[label.item()] = torch.cat((vocab_list[label.item()], feature_vecs[i].unsqueeze(0)))
+
+    with torch.no_grad():
+        sos_token = torch.zeros(32,1,32,32)
+        sos_vec = feature_extractor(sos_token.cuda(), True).cpu()
+        eos_token = torch.ones(32,1,32,32)
+        eos_vec = feature_extractor(eos_token.cuda(), True).cpu()
+    vocab = {i: vocab_list[i].mean(dim=0) for i in range(vocab_size)}
+    vocab[tokens['src']['SOS']] = sos_vec
+    vocab[tokens['src']['EOS']] = eos_vec
+    torch.save(vocab, 'vocab.pth')
+    return vocab
+

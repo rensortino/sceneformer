@@ -79,13 +79,16 @@ def compare_weights(epoch, old_state_dict, new_state_dict):
                 out.write(f'Module {module} changed\n')
 
 
-def log_prediction(gt, tgt_box, pred, box, logger, nrow=16, title : str = "Logged Image"):
+def log_prediction(gt, tgt_box, pred, box, n_channels, seq_bs, logger, title : str = "Logged Image"):
+
+    pred = pred.view(pred.shape[0] * pred.shape[1], n_channels, pred.shape[2], pred.shape[3])
+    gt = gt.view(gt.shape[0] * gt.shape[1], n_channels, gt.shape[3], gt.shape[4])
 
     resize = T.Resize((64,64))
     gt = resize(gt)
     pred = resize(pred)
-    gt_grid = make_grid(gt.cpu(), nrow=nrow, padding=16)
-    p_grid = make_grid(pred.cpu(), nrow=nrow, padding=16)
+    gt_grid = make_grid(gt.cpu(), nrow=seq_bs, padding=16)
+    p_grid = make_grid(pred.cpu(), nrow=seq_bs, padding=16)
 
     gt_img, _ = img_to_PIL(gt_grid)
     p_img, _ = img_to_PIL(p_grid)

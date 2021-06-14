@@ -1,3 +1,4 @@
+from data_processing import build_vocab
 from feature_extractor import ResNet18
 import math
 import json
@@ -7,6 +8,8 @@ from layers import ImageGenerator, PositionalEncoding, ImageTransformer
 import numpy as np
 from attrdict import AttrDict
 from log_utils import Logging
+from layers import ImageGenerator, Discriminator
+
 
 
 
@@ -22,13 +25,18 @@ from cgan import weights_init, DCGANDiscriminator
 # TODO Input mask should zero attention where there is pad
 # Target mask should do this and also the triu mask
 
-TOKENS = {
+tokens = {
+    'src': {
+        "SOS": 14,
+        "EOS": 15,
+        "PAD": 16
+    },
+    'tgt': {
         "SOS": 0.0,
         "EOS": 1.0,
-        "PAD": 0.5
+        "PAD": 0.5 # TODO Modify 
+    }
 }
-
-
 
 def main(args):
 
@@ -47,7 +55,7 @@ def main(args):
 
     if args.loss == "mse":
         criterion = torch.nn.MSELoss()
-    elif args.loss == "l1":
+    elif args.loss == "mae":
         criterion = torch.nn.L1Loss()
     elif args.loss == "kldiv":
         criterion = torch.nn.KLDivLoss()
@@ -59,16 +67,20 @@ def main(args):
     wandb.login()
 
     hparams = dict(
+        name = args.name,
         nhid = args.model.ff_dim, # the dimension of the feedforward network model in nn.TransformerEncoder
         nlayers = args.model.n_layers, # the number of nn.TransformerEncoderLayer in nn.TransformerEncoder
         nheads = args.model.n_heads, # the number of heads in the multiheadattention models
         dropout = args.model.dropout, # the dropout value
-        g_lr = args.optimizer.g_lr,
-        d_lr = args.optimizer.d_lr,
+        criterion = args.loss,
+        seq_len = args.model.seq_len,
+        seq_bs = args.model.seq_bs,
         t_lr = args.optimizer.t_lr,
         emb_size = args.model.emb_size,
-        img_h = args.data.img_h,
-        img_w = args.data.img_w,
+        img_size = args.data.img_h,
+        one_batch = args.trainer.debug_one_batch,
+        ngf = args.model.ngf,
+        ndf = args.model.ndf
     )
 
     wandb.init(
@@ -76,9 +88,7 @@ def main(args):
         mode="disabled"
     )
 
-    wandb.run.name = "Testing one batch - image embedding with generator"
-
-    config = wandb.config
+    wandb.run.name = "Image embedding KL on embeddings"
 
     tb_logger = TensorBoardLogger("tb_logs", name="YTID", version=wandb.run.name)
 
@@ -100,7 +110,7 @@ def main(args):
     )
 
     #TODO Pass as kwargs
-    feature_extractor = ResNet18(args.model.fe_weights_path)
+    feature_extractor = ResNet18(args.model.fe_weights_path, 16)
     transformer = ImageTransformer(
             args.model.emb_size,
             args.model.n_heads,
@@ -113,8 +123,11 @@ def main(args):
             args.device,
             feature_extractor
         ).to(args.device)
-    disc = DCGANDiscriminator(image_channels=args.data.n_channels).to(args.device)
-    model = YTID(transformer, disc, args, criterion).to(args.device)
+    disc = Discriminator(args.model.emb_size, ndf=16, channels=args.data.n_channels)
+    img_gen = ImageGenerator(image_size, emb_size=args.model.emb_size, ngf=16, channels=args.data.n_channels).to(args.device)
+    data_module.setup()
+    vocab = build_vocab(feature_extractor, data_module.train_dataloader(), tokens)
+    model = YTID(transformer, img_gen, disc, feature_extractor, args, criterion).to(args.device)
 
     trainer.fit(model, data_module)
     

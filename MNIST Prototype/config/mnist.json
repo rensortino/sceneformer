@@ -9,11 +9,13 @@
         "n_layers" : 4,      
         "n_heads" : 8,       
         "dropout" : 0.2,    
-        "fe_weights_path": "ckpt/mnist/resnet18_nonorm.pt",
+        "fe_weights_path": "ckpt/mnist/resnet18_16class.pt",
         "num_classes": 10,
         "seq_len" : 4,
         "max_seq_len": 6,
-        "seq_bs" : 8
+        "seq_bs" : 8,
+        "ndf": 128,
+        "ngf": 128
     },
     "data": {
         "type": "MnistDataLoader",
@@ -28,13 +30,13 @@
     },
     "optimizer": {
         "type": "Adam",
-        "g_lr" : 1e-4,
+        "g_lr" : 1e-2,
         "d_lr" : 1e-4,
         "t_lr" : 1e-4,
         "weight_decay": 0,
         "amsgrad": true
     },
-    "loss": "xe",
+    "loss": "kldiv",
     "metrics": [
         "accuracy", "top_k_acc"
     ],
@@ -47,6 +49,7 @@
 
     "trainer": {
         "epochs": 100,
+        "debug_one_batch": true,
 
         "weights_path": "tb_logs\\YTID\\Full batch one hot 52\\checkpoints\\epoch=80-step=139157.ckpt",
 
