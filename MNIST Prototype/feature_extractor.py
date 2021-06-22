@@ -13,12 +13,8 @@ class ResNet18(nn.Module):
             self.model.conv1 = nn.Conv2d(3, 64, kernel_size=3, stride=1, padding=1, bias=False)
         self.model.load_state_dict(torch.load(w_path))
         self.linear = self.model.fc
-        # self.out_layer = self.model._modules.get('avgpool')
-        # self.embedding_size = self.model.fc.in_features
         self.model.fc = nn.Identity()
 
-    def forward(self, imgs, extract_features=False):
-        output = self.model(imgs)
-        if not extract_features:
-            output = self.linear(output)
-        return output
+    def forward(self, imgs):
+        out_features = self.model(imgs)
+        return out_features

@@ -1,5 +1,6 @@
 import math
 from torch import nn
+import torch.nn.functional as F
 import torch
 import torchvision.transforms as T
 from feature_extractor import ResNet18
@@ -86,6 +87,16 @@ class PositionalEncoding(nn.Module):
         x = x + self.pe[:x.size(0), :]
         return self.dropout(x)
 
+class Generator(nn.Module):
+    "Define standard linear + relu generation step."
+    def __init__(self, d_model):
+        super(Generator, self).__init__()
+        self.proj = nn.Linear(d_model, d_model)
+
+    def forward(self, x):
+        return F.relu(self.proj(x))
+        
+
 class ImageTransformer(nn.Module):
     def __init__(self,  emb_size,
                         n_heads,
@@ -124,6 +135,7 @@ class ImageTransformer(nn.Module):
         # self.tgt_embedding = torch.nn.Embedding(tgt_vocab_size, emb_size).to(device)
         self.tgt_embedding = feature_extractor
         self.fc = nn.Linear(emb_size, tgt_vocab_size).to(device)
+        self.generator = Generator(emb_size).to(device)
 
     def make_src_mask(self, src):
         src_mask = src.transpose(0, 1) == self.src_pad_idx
@@ -149,10 +161,10 @@ class ImageTransformer(nn.Module):
 
         seq_len, bs = targets.shape[0], targets.shape[1]
 
-        targets = targets.reshape(-1, self.data_options.n_channels, *self.image_size)
+        # targets = targets.reshape(-1, self.data_options.n_channels, *self.image_size)
         # with torch.no_grad():
-        targets = self.tgt_embedding(targets, True)
-        targets = targets.reshape(seq_len, bs, -1)
+        # targets = self.tgt_embedding(targets, True)
+        # targets = targets.reshape(seq_len, bs, -1)
         targets = self.pos_enc(targets)
 
         # Forward transformer
@@ -160,14 +172,16 @@ class ImageTransformer(nn.Module):
         targets = targets.to(self.device)
         tgt_mask = self.transformer.generate_square_subsequent_mask(seq_len).to(self.device)
         trf_out = self.transformer(src, targets, tgt_mask=tgt_mask)
-        # out = self.fc(trf_out)
+        out_embeddings = self.generator(trf_out)
+        out = self.fc(trf_out)
+        out = F.relu(out)
         # image_vector = trf_out[:,:,:-4]
         #bbox = trf_out[:,:,-4:]
 
         # out_imgs = self.img_gen(out)
         # out_vectors = self.tgt_embedding(out_imgs)
 
-        return trf_out
+        return trf_out, out
         #return out_imgs, image_vector, bbox
 
 

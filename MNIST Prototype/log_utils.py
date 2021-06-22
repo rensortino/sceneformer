@@ -11,9 +11,10 @@ import wandb
 
 class Logging(Callback):
 
-    def __init__(self):
+    def __init__(self, tb_logger):
         super().__init__()
         self.start_time = None
+        self.tb_logger = tb_logger
 
     def on_epoch_start(self, trainer, pl_module):
         self.start_time = time.time()
@@ -27,7 +28,7 @@ class Logging(Callback):
         #trainer.logger.experiment.log({"Reconstructed Image": [wandb.Image(np_image, caption="First of each batch")]})
         # self.log('pl_logger_train_loss', pl_module.step_loss)
         # trainer.logger.experiment.add_scalar('training_loss', train_loss_mean, global_step=pl_module.current_epoch)
-        pl_module.logger.experiment.add_scalar('Epoch Elapsed Time', time.time() - self.start_time)
+        self.tb_logger.add_scalar('Epoch Elapsed Time', time.time() - self.start_time)
 
 def img_to_PIL(img):
 
@@ -53,10 +54,8 @@ def save_weights(model):
     return state_dict
 
 def get_data_stats(data):
-    print(f'Mean:\t{data.mean()}')
-    print(f'Std:\t{data.std()}')
-    print(f'Max:\t{data.max()}')
-    print(f'Min:\t{data.min()}')
+    stats = f'Mean:\t{data.mean()}\nStd:\t{data.std()}\nMax:\t{data.max()}\nMin:\t{data.min()}'
+    return stats
 
 def compare_weights(epoch, old_state_dict, new_state_dict):
     changed = {}
@@ -100,6 +99,12 @@ def log_prediction(gt, tgt_box, pred, box, n_channels, seq_bs, logger, title : s
 
     logger.experiment.add_image("Prediction", p_img, dataformats="HWC")
     logger.experiment.add_image("Ground Truth", gt_img, dataformats="HWC")
+
+
+def log_metric(pl_module, title, metric, step):
+    pl_module.log(title, metric, prog_bar=True)
+    pl_module.tb_writer.add_scalar(title, metric, step)
+    wandb.log({title: metric})
 
 
 def convert_weights_pl_to_pt(w_path, out_path):
