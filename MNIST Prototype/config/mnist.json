@@ -1,42 +1,42 @@
 {
     "name": "MNIST",
     "n_gpu": 1,
+    "test": false,
 
     "model": {
         "type": "Transformer",
         "ff_dim" : 2048,
         "emb_size": 512,
-        "n_layers" : 4,      
+        "n_layers" : 1,
         "n_heads" : 8,       
-        "dropout" : 0.2,    
-        "fe_weights_path": "ckpt/mnist/resnet18_16class.pt",
-        "num_classes": 10,
+        "dropout" : 0.2,
+        "fe_weights_path": "ckpt/mnist/resnet18_16classes.pt",
+        "num_classes": 16,
         "seq_len" : 4,
         "max_seq_len": 6,
         "seq_bs" : 8,
-        "ndf": 128,
-        "ngf": 128
+        "ndf": 16,
+        "ngf": 16
     },
     "data": {
         "type": "MnistDataLoader",
         "data_dir": "data/",
-        "batch_size": 32,
+        "batch_size": 128,
         "img_w": 32,
         "img_h": 32,
         "n_channels": 1,
         "persistent_workers": true,
         "validation_split": 0.1,
-        "num_workers": 1
+        "num_workers": 16
     },
     "optimizer": {
         "type": "Adam",
-        "g_lr" : 1e-2,
-        "d_lr" : 1e-4,
-        "t_lr" : 1e-4,
+        "g_lr" : 1e-6,
+        "d_lr" : 1e-6,
+        "t_lr" : 0.5,
         "weight_decay": 0,
         "amsgrad": true
     },
-    "loss": "kldiv",
     "metrics": [
         "accuracy", "top_k_acc"
     ],
@@ -48,20 +48,19 @@
     },
 
     "trainer": {
-        "epochs": 100,
+        "epochs": 300,
         "debug_one_batch": true,
+        "resume": false,
+        "log_weights_change": false,
 
-        "weights_path": "tb_logs\\YTID\\Full batch one hot 52\\checkpoints\\epoch=80-step=139157.ckpt",
+        "output_dir": "output",
+        "weight_dir": "weights",
+        "tensorboard_dir": "tb_logs",
 
         "save_dir": "saved/",
         "save_period": 1,
         "verbosity": 2,
 
-        "log_every_n_steps": 20,
-        
-        "monitor": "min val_loss",
-        "early_stop": 10,
-
-        "tensorboard": true
+        "log_every_n_steps": 20
     }
 }

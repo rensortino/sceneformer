@@ -7,6 +7,25 @@ from pytorch_lightning.callbacks import Callback
 from torchvision.utils import make_grid
 from PIL import Image
 import wandb
+import os
+from torch.utils.tensorboard import SummaryWriter
+from torch.utils.tensorboard.summary import hparams
+
+class SummaryWriter(SummaryWriter):
+    def add_hparams(self, hparam_dict, metric_dict):
+        torch._C._log_api_usage_once("tensorboard.logging.add_hparams")
+        if type(hparam_dict) is not dict or type(metric_dict) is not dict:
+            raise TypeError('hparam_dict and metric_dict should be dictionary.')
+        exp, ssi, sei = hparams(hparam_dict, metric_dict)
+
+        logdir = self._get_file_writer().get_logdir()
+        
+        with SummaryWriter(log_dir=logdir) as w_hp:
+            w_hp.file_writer.add_summary(exp)
+            w_hp.file_writer.add_summary(ssi)
+            w_hp.file_writer.add_summary(sei)
+            for k, v in metric_dict.items():
+                w_hp.add_scalar(k, v)
 
 
 class Logging(Callback):
@@ -25,12 +44,16 @@ class Logging(Callback):
             #trainer.logger.watch(trainer.model)
 
     def on_epoch_end(self, trainer, pl_module):
-        #trainer.logger.experiment.log({"Reconstructed Image": [wandb.Image(np_image, caption="First of each batch")]})
-        # self.log('pl_logger_train_loss', pl_module.step_loss)
-        # trainer.logger.experiment.add_scalar('training_loss', train_loss_mean, global_step=pl_module.current_epoch)
-        self.tb_logger.add_scalar('Epoch Elapsed Time', time.time() - self.start_time)
+        pl_module.log(f'{pl_module.phase}/Epoch Elapsed Time', time.time() - self.start_time)
+        # if pl_module.current_epoch == 0:
+        #     # Log just once
+        #     self.tb_logger.add_hparams(dict(pl_module.hparams), dict())
 
 def img_to_PIL(img):
+
+    '''
+    img: shape [C, H, W]
+    '''
 
     if len(img.shape) > 4:
         raise Exception("Too many dimensions in image to show")
@@ -41,10 +64,22 @@ def img_to_PIL(img):
 
     if type(img) == torch.Tensor:
         img = img.cpu().detach()
+
+    n_ch = img.shape[0]
+    if n_ch == 1:
+        img_array = img.squeeze(0).numpy()
+        arr_to_pil = lambda x: Image.fromarray(x.astype('uint8'), 'L')
+
+    elif n_ch == 3:
+        img_array = np.transpose(img.numpy(), (1,2,0))
+        arr_to_pil = lambda x: Image.fromarray(x.astype('uint8'), 'RGB')
+
+    else:
+        raise Exception('Unsupported number of channels ({n_ch})')
+
         
-    img_array = np.transpose(img.numpy(), (1,2,0))
     norm_img = (img_array - img_array.min()) / (img_array.max() - img_array.min()) * 255
-    PIL_image = Image.fromarray(norm_img.astype('uint8'), 'RGB')
+    PIL_image = arr_to_pil(norm_img)
     return norm_img, PIL_image
 
 def save_weights(model):
@@ -101,8 +136,10 @@ def log_prediction(gt, tgt_box, pred, box, n_channels, seq_bs, logger, title : s
     logger.experiment.add_image("Ground Truth", gt_img, dataformats="HWC")
 
 
-def log_metric(pl_module, title, metric, step):
-    pl_module.log(title, metric, prog_bar=True)
+def log_metric(pl_module, title, metric, step, prog_bar=False):
+    # for phase in metrics:
+    #     for metric in phase:
+    pl_module.log(title, metric, prog_bar=prog_bar, logger=False)
     pl_module.tb_writer.add_scalar(title, metric, step)
     wandb.log({title: metric})
 

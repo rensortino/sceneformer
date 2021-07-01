@@ -1,7 +1,6 @@
 import torch
 from torchvision.utils import make_grid
 import torch.nn.functional as F
-import numpy as np
 
 def get_embedding_from_vocab(src, vocab):
     embedding = torch.zeros(1,512)
@@ -28,7 +27,6 @@ def get_target_images(images, TOKENS):
         bboxes.append(bbox)
 
     # Repeat boxes over batch dimension and swap this dimension with the seq_len
-    # TODO Parametrize
     norm_boxes = torch.tensor(bboxes, device=images.device) / (h*2)
     tgt_boxes = norm_boxes.unsqueeze(0).repeat(bs,1,1)
 
@@ -170,16 +168,16 @@ def build_vocab(feature_extractor, dataloader, tokens, vocab_size=16):
     for images, labels in dataloader:
 
         with torch.no_grad():
-            feature_vecs = feature_extractor(images.cuda(), True).cpu()
+            feature_vecs = feature_extractor(images.cuda()).cpu()
         
         for i, label in enumerate(labels):
             vocab_list[label.item()] = torch.cat((vocab_list[label.item()], feature_vecs[i].unsqueeze(0)))
 
     with torch.no_grad():
         sos_token = torch.zeros(32,1,32,32)
-        sos_vec = feature_extractor(sos_token.cuda(), True).cpu()
+        sos_vec = feature_extractor(sos_token.cuda()).cpu()
         eos_token = torch.ones(32,1,32,32)
-        eos_vec = feature_extractor(eos_token.cuda(), True).cpu()
+        eos_vec = feature_extractor(eos_token.cuda()).cpu()
     vocab = {i: vocab_list[i][1:].mean(dim=0) for i in range(vocab_size)}
     vocab[tokens['src']['SOS']] = sos_vec.mean(dim=0)
     vocab[tokens['src']['EOS']] = eos_vec.mean(dim=0)
