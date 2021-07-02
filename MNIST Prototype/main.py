@@ -18,29 +18,16 @@ import pytorch_lightning as pl
 
 import wandb
 
-tokens = {
-    'src': {
-        "SOS": 14,
-        "EOS": 15,
-        "PAD": 16
-    },
-    'tgt': {
-        "SOS": 0.0,
-        "EOS": 1.0
-    }
-}
-
 def main(args):
 
     # Setup
-
     assert args.model.emb_size % args.model.n_heads == 0, "Embedding size not divisible by number of heads"
-    assert args.data.batch_size % args.model.seq_len == 0, "Batch size not divisible by sequence length"
+    assert args.data.batch_size % args.data.seq_len == 0, "Batch size not divisible by sequence length"
 
     os.makedirs(args.trainer.output_dir, exist_ok=True)
     os.makedirs(args.trainer.weight_dir, exist_ok=True)
     
-    args['model']['seq_bs'] = int(args.data.batch_size / args.model.seq_len)
+    args['data']['seq_bs'] = int(args.data.batch_size / args.data.seq_len)
     args.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     # image_size = (args.data.img_w * int(math.sqrt(args.model.seq_len)), args.data.img_h * int(math.sqrt(args.model.seq_len)))
     image_size = (args.data.img_w, args.data.img_h)
@@ -65,8 +52,8 @@ def main(args):
         nlayers = args.model.n_layers, # the number of nn.TransformerEncoderLayer in nn.TransformerEncoder
         nheads = args.model.n_heads, # the number of heads in the multiheadattention models
         dropout = args.model.dropout, # the dropout value
-        seq_len = args.model.seq_len,
-        seq_bs = args.model.seq_bs,
+        seq_len = args.data.seq_len,
+        seq_bs = args.data.seq_bs,
         t_lr = args.optimizer.t_lr,
         g_lr = args.optimizer.g_lr,
         d_lr = args.optimizer.d_lr,
@@ -94,13 +81,11 @@ def main(args):
         mode=run_mode
     )
 
-    # TODO Delete?
-    tb_writer = SummaryWriter(os.path.join(args.trainer.tensorboard_dir, run_name, formatted_date))
-
     tb_logger = pl.loggers.TensorBoardLogger(
         save_dir="pl_logs",
         name=run_name,
-        version=formatted_date
+        version=formatted_date,
+        log_graph=True,
         # default_hp_metric=False,
     )
 
@@ -122,15 +107,10 @@ def main(args):
     disc = Discriminator(args.model.emb_size, ndf=16, channels=args.data.n_channels)
     img_gen = ImageGenerator(image_size, emb_size=args.model.emb_size, ngf=args.model.ngf, channels=args.data.n_channels).to(args.device)
 
-    model = YTID(hparams, transformer, img_gen, disc, feature_extractor, tb_writer, args).to(args.device)
+    data_module.setup()
+    example_input = data_module.get_example_batch()
 
-    # Create Vocabulary of embeddings
-
-    if os.path.exists('vocab.pth'):
-        vocab = torch.load('vocab.pth')
-    else:
-        data_module.setup()
-        vocab = build_vocab(feature_extractor, data_module.train_dataloader(), tokens)
+    model = YTID(hparams, transformer, img_gen, disc, feature_extractor, example_input, args).to(args.device)
 
     # Define trainer module
 

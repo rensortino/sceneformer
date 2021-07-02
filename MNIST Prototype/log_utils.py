@@ -37,6 +37,8 @@ class Logging(Callback):
 
     def on_epoch_start(self, trainer, pl_module):
         self.start_time = time.time()
+        if pl_module.args.trainer.log_weights_change:
+            self.old_weights = save_weights(self.img_transformer)
 
     def on_fit_start(self, trainer, pl_module):
         pass
@@ -45,6 +47,9 @@ class Logging(Callback):
 
     def on_epoch_end(self, trainer, pl_module):
         pl_module.log(f'{pl_module.phase}/Epoch Elapsed Time', time.time() - self.start_time)
+        if pl_module.args.trainer.log_weights_change:
+            new_weights = save_weights(self.img_transformer)
+            compare_weights(self.current_epoch, self.old_weights, new_weights)
         # if pl_module.current_epoch == 0:
         #     # Log just once
         #     self.tb_logger.add_hparams(dict(pl_module.hparams), dict())
@@ -139,8 +144,7 @@ def log_prediction(gt, tgt_box, pred, box, n_channels, seq_bs, logger, title : s
 def log_metric(pl_module, title, metric, step, prog_bar=False):
     # for phase in metrics:
     #     for metric in phase:
-    pl_module.log(title, metric, prog_bar=prog_bar, logger=False)
-    pl_module.tb_writer.add_scalar(title, metric, step)
+    pl_module.log(title, metric, prog_bar=prog_bar)
     wandb.log({title: metric})
 
 

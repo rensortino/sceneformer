@@ -8,18 +8,6 @@ import os
 from data_processing import get_embedding_from_vocab, get_succession, get_target_images, append_tokens, process_labels
 import wandb
 
-tokens = {
-    'src': {
-        "SOS": 14,
-        "EOS": 15,
-        "PAD": 16
-    },
-    'tgt': {
-        "SOS": 0.0,
-        "EOS": 1.0
-    }
-}
-
 class YTID(pl.LightningModule):
     
     def __init__(self,
@@ -28,21 +16,15 @@ class YTID(pl.LightningModule):
                 img_gen: nn.Module,
                 disc: nn.Module,
                 feature_extractor,
-                # TODO Substitute with default PL logger ?
-                tb_writer,
+                example_input,
                 args):
         super(YTID, self).__init__()
         self.hparams.update(hparams)
         self.automatic_optimization = False # disable automatic calling of backward()
-        self.max_seq_len = args.model.max_seq_len
-        self.tb_writer = tb_writer
+        self.max_seq_len = args.data.max_seq_len
+        self.example_input_array = example_input
         self.feature_extractor = feature_extractor
         self.phase = None
-
-        # TODO Change metric logging
-        self.metric_names = ['loss_cls', 'loss_emb', 'loss_trf', 'loss_gen', 'loss_fake', 'loss_real', 'loss_disc', 'acc', 'n_iterations']
-        phase_metrics = {name: 0.0 for name in self.metric_names}
-        self.metrics = { p: phase_metrics for p in ['train', 'val', 'test'] }
 
         # Variables for logging
         self.step = { p: 1 for p in ['train', 'val', 'test'] }
@@ -71,72 +53,98 @@ class YTID(pl.LightningModule):
         t_sch, g_sch, d_sch = self.lr_schedulers()
 
         # Data loading
-        original_images, labels = batch
-        images = original_images.view(self.args.model.seq_len, self.args.model.seq_bs, self.args.data.n_channels, self.img_transformer.image_size[0], self.img_transformer.image_size[1])
-
-        # Data Processing
-        # tgt = [<SOS>, [embeddings], <EOS> (, [<PAD>] ) ]
-        labels = labels.reshape(self.args.model.seq_bs, self.args.model.seq_len)
-        src_seq = process_labels(labels, 14, 15)
-        # tgt_images = get_target_images(images, tokens['tgt'])
-        vocab = torch.load('vocab.pth')
-        tgt_embeddings = get_embedding_from_vocab(src_seq, vocab)
-
-        if self.args.trainer.log_weights_change:
-            old_weights = save_weights(self.img_transformer)
+        images, src_seq, tgt_seq = batch
         
-        feature_vecs = self.transformer_step(src_seq, tgt_embeddings, self.t_opt)
+        # Transformer Forward
+        feature_vecs = self.transformer_step(src_seq, tgt_seq, self.t_opt)
 
+        # Discriminator Forward
         self.discriminator_step(feature_vecs.detach(), images, self.d_opt)
 
+        # Generator Forward
         pred_imgs = self.generator_step(feature_vecs.detach(), src_seq[1:], self.g_opt)
         
+        # Log generated images
         _, pil_img = img_to_PIL(pred_imgs)
         wandb.log({self.phase+'/out_image': wandb.Image(pil_img)})
 
-        torch.nn.utils.clip_grad_norm_(self.img_transformer.parameters(), max_norm=1)
-
-        if self.args.trainer.log_weights_change:
-            new_weights = save_weights(self.img_transformer)
-            compare_weights(self.current_epoch, old_weights, new_weights)
-
+        # Increase phase step (for logging)
         self.step[self.phase] += 1
 
     def validation_step(self, batch, batch_idx):
+
         self.phase = 'val'
-        # Data loading
-        original_images, labels = batch
-        images = original_images.view(self.args.model.seq_len, self.args.model.seq_bs, self.args.data.n_channels, self.img_transformer.image_size[0], self.img_transformer.image_size[1])
-
-        # Data Processing
-        # tgt = [<SOS>, [embeddings], <EOS> (, [<PAD>] ) ]
-        labels = labels.reshape(self.args.model.seq_bs, self.args.model.seq_len)
-        src_seq = process_labels(labels, 14, 15)
-        # tgt_images = get_target_images(images, tokens['tgt'])
-        vocab = torch.load('vocab.pth')
-        tgt_embeddings = get_embedding_from_vocab(src_seq, vocab)
         
-        feature_vecs = self.transformer_step(src_seq, tgt_embeddings, self.t_opt)
+        # Data loading
+        images, src_seq, tgt_seq = batch
+        
+        # Transformer Forward
+        feature_vecs = self.transformer_step(src_seq, tgt_seq, self.t_opt)
 
+        # Discriminator Forward
         self.discriminator_step(feature_vecs.detach(), images, self.d_opt)
 
+        # Generator Forward
         pred_imgs = self.generator_step(feature_vecs.detach(), src_seq[1:], self.g_opt)
         
+        # Log generated images
         _, pil_img = img_to_PIL(pred_imgs)
         wandb.log({self.phase+'/out_image': wandb.Image(pil_img)})
 
+        # Increase phase step (for logging)
         self.step[self.phase] += 1
 
-    def discriminator_step(self, feature_vecs, real_imgs, opt):
-        # Measure discriminator's ability to classify real from generated samples
+    def transformer_step(self, src, tgt, opt):
 
+        # TODO Check if processed input is the same as original input (no alteration has been done)
+
+        # Transformer decoder output is standardized
+        trf_out, out_classes = self(src, tgt[:-1])
+        
+        # Extract features
+        out_classes = self.feature_extractor.linear(trf_out)
+        with torch.no_grad():
+            tgt_features = self.feature_extractor.linear(tgt)
+
+        # Logging output
+        with open(f'{self.args.trainer.output_dir}/{wandb.run.name}.txt', 'w') as o:
+            o.write(f'Input:\n{src}\n\Target:\n{tgt_features.argmax(2)}\n\nOutput:\n{out_classes.argmax(2)}\n')
+            o.write(f'\n\Embedding before linear;\nTarget:\n{tgt}\n\nOutput:\n{trf_out}')
+            o.write(f'\n\Embedding after linear;\nTarget:\n{tgt_features}\n\nOutput:\n{out_classes}')
+            o.write(f'\n\nStats before linear:\nTarget:\n{get_data_stats(tgt)}\n\Output:\n{get_data_stats(trf_out)}')
+            o.write(f'\n\nStats After Linear:\nTarget{get_data_stats(tgt_features)}\nOutput:\n{get_data_stats(out_classes)}')
+
+            acc_out = (tgt_features[1:-1].argmax(2) == out_classes[:-1].argmax(2)).sum() / (out_classes[:-1].shape[0] * out_classes[:-1].shape[1])
+        
+        # Compute losses
+        cls_loss = self.classification_loss(out_classes[:-1], src[1:-1])
+        emb_loss = self.reconstruction_loss(trf_out, tgt[1:])
+        trf_loss = (emb_loss * 10) + cls_loss
+
+        # Log metrics
+        log_metric(self, self.phase+'/acc_out', acc_out, self.step[self.phase], True)
+        log_metric(self, self.phase+'/loss_emb', emb_loss, self.step[self.phase])
+        log_metric(self, self.phase+'/loss_cls', cls_loss, self.step[self.phase])
+        log_metric(self, self.phase+'/loss_trf', trf_loss, self.step[self.phase], True)
+
+
+        # Backward
+        if self.phase == 'train':
+            # Clip Gradients
+            torch.nn.utils.clip_grad_norm_(self.img_transformer.parameters(), max_norm=1)
+            opt.zero_grad()
+            self.manual_backward(trf_loss)
+            opt.step()
+
+        return trf_out
+
+    def discriminator_step(self, feature_vecs, real_imgs, opt):
+
+        # Generate fake samples
         predictions = self.img_gen(feature_vecs)
 
-        sl, bs, c, h, w = real_imgs.shape
-        tgt_imgs = real_imgs.reshape(sl * bs, c, h, w)
-
         # Normalize to [-1, 1] range
-        tgt_imgs = 2 * ((tgt_imgs - tgt_imgs.min()) / tgt_imgs.max() - tgt_imgs.min()) - 1
+        tgt_imgs = 2 * ((real_imgs - real_imgs.min()) / real_imgs.max() - real_imgs.min()) - 1
 
         # how well can it label as real?
         real = torch.ones(tgt_imgs.size(0), 1, device=self.args.device)
@@ -182,42 +190,6 @@ class YTID(pl.LightningModule):
             opt.step()
 
         return predictions
-
-    def transformer_step(self, src, tgt, opt):
-
-        # TODO Check if processed input is the same as original input (no alteration has been done)
-
-        # Transformer decoder output is standardized
-        trf_out, out = self(src, tgt[:-1])
-        
-        # tgt[1:] (shifted left to compare the real sequences, without the <SOS>)
-        # out_classes = self.feature_extractor.linear(out_embeddings)
-        out_classes = self.feature_extractor.linear(trf_out)
-        tgt_features = self.feature_extractor.linear(tgt)
-        with open(f'{self.args.trainer.output_dir}/{wandb.run.name}.txt', 'w') as o:
-            o.write(f'Input:\n{src}\n\Target:\n{tgt_features.argmax(2)}\n\nOutput:\n{out_classes.argmax(2)}\n')
-            o.write(f'\n\Embedding before linear;\nTarget:\n{tgt}\n\nOutput:\n{trf_out}')
-            o.write(f'\n\Embedding after linear;\nTarget:\n{tgt_features}\n\nOutput:\n{out_classes}')
-            o.write(f'\n\nStats before linear:\nTarget:\n{get_data_stats(tgt)}\n\Output:\n{get_data_stats(trf_out)}')
-            o.write(f'\n\nStats After Linear:\nTarget{get_data_stats(tgt_features)}\nOutput:\n{get_data_stats(out_classes)}')
-
-            acc_out = (tgt_features[1:].argmax(2) == out_classes.argmax(2)).sum() / (out_classes.shape[0] * out_classes.shape[1])
-        
-        cls_loss = self.classification_loss(out_classes, src[1:])
-        emb_loss = self.reconstruction_loss(trf_out, tgt[1:])
-        trf_loss = emb_loss + cls_loss
-
-        log_metric(self, self.phase+'/acc_out', acc_out, self.step[self.phase], True)
-        log_metric(self, self.phase+'/loss_emb', emb_loss, self.step[self.phase])
-        log_metric(self, self.phase+'/loss_cls', cls_loss, self.step[self.phase])
-        log_metric(self, self.phase+'/loss_trf', trf_loss, self.step[self.phase], True)
-
-        if self.phase == 'train':
-            opt.zero_grad()
-            self.manual_backward(trf_loss)
-            opt.step()
-
-        return  trf_out
 
     def adversarial_loss(self, y_hat, y):
         return F.binary_cross_entropy(y_hat, y)
@@ -269,8 +241,8 @@ class YTID(pl.LightningModule):
         self.custom_histogram_adder()
 
         # Zero metrics
-        phase_metrics = {name: 0.0 for name in self.metric_names}
-        self.metrics = { p: phase_metrics for p in ['train', 'val', 'test'] }
+        # phase_metrics = {name: 0.0 for name in self.metric_names}
+        # self.metrics = { p: phase_metrics for p in ['train', 'val', 'test'] }
         torch.save({
                 'epoch': self.current_epoch,
                 'model' : self.state_dict(),

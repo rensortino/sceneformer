@@ -169,11 +169,11 @@ class ImageTransformer(nn.Module):
         tgt_mask = self.transformer.generate_square_subsequent_mask(seq_len).to(self.device)
         trf_out = self.transformer(src, targets, tgt_mask=tgt_mask)
         # trf_out = F.relu(trf_out)
-        out_embeddings = self.fc_same_dim(trf_out)
+        # out_embeddings = self.fc_same_dim(trf_out)
         out = self.fc(trf_out)
         out = F.relu(out)
 
-        return trf_out, out_embeddings
+        return trf_out, out
 
 def test_model_size(model, x):
     for i, m in enumerate(model):

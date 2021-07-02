@@ -1,6 +1,7 @@
 import torch
 from torchvision.utils import make_grid
 import torch.nn.functional as F
+from feature_extractor import ResNet18
 
 def get_embedding_from_vocab(src, vocab):
     embedding = torch.zeros(1,512)
@@ -10,7 +11,7 @@ def get_embedding_from_vocab(src, vocab):
         else:
             embedding = torch.cat((embedding, vocab[s.item()].unsqueeze(0)))
 
-    return embedding.reshape(*src.shape, -1).cuda()
+    return embedding.reshape(*src.shape, -1)
 
 
 def get_target_images(images, TOKENS):
@@ -40,6 +41,16 @@ def get_target_images(images, TOKENS):
 
 
 def process_labels(labels, sos_token, eos_token):
+    '''
+    labels: [bs, seq_len]
+    '''
+    labels = labels.t()
+    in_list = append_tokens(labels.tolist(), eos_token, sos_token)
+    in_seq = torch.tensor(in_list, device=labels.device)
+    # Convert in transformer dimension order
+    return in_seq.t()
+
+def wrong_process_labels(labels, sos_token, eos_token):
     '''
     labels: [bs, seq_len]
     '''
@@ -163,7 +174,10 @@ def pad_sequence(seq, max_seq_len):
         return padded_seq
 
 
-def build_vocab(feature_extractor, dataloader, tokens, vocab_size=16):
+def build_vocab(dataloader, tokens, fe_weights="ckpt/mnist/resnet18_16classes.pt", vocab_size=16):
+
+    # TODO Generalize
+    feature_extractor = ResNet18(fe_weights, 16)
     vocab_list = [torch.zeros(1,512) for i in range(vocab_size)]
     for images, labels in dataloader:
 
