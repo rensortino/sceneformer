@@ -1,11 +1,11 @@
 {
     "name": "MNIST",
     "n_gpu": 1,
-    "test": true,
+    "test": false,
 
     "model": {
         "type": "Transformer",
-        "ff_dim" : 2048,
+        "ff_dim" : 1024,
         "emb_size": 512,
         "n_layers" : 2,
         "n_heads" : 8,       
@@ -26,13 +26,13 @@
         "n_channels": 1,
         "persistent_workers": true,
         "validation_split": 0.1,
-        "num_workers": 16
+        "num_workers": 1
     },
     "optimizer": {
         "type": "Adam",
         "g_lr" : 1e-5,
         "d_lr" : 1e-5,
-        "t_lr" : 0.05,
+        "t_lr" : 1e-4,
         "weight_decay": 0,
         "amsgrad": true
     },
@@ -47,7 +47,7 @@
     },
 
     "trainer": {
-        "epochs": 1000,
+        "epochs": 3000,
         "debug_one_batch": true,
         "resume": false,
         "log_weights_change": false,

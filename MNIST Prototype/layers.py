@@ -131,7 +131,7 @@ class ImageTransformer(nn.Module):
         # self.tgt_embedding = torch.nn.Embedding(tgt_vocab_size, emb_size).to(device)
         self.tgt_embedding = feature_extractor
         self.fc = nn.Linear(emb_size, tgt_vocab_size).to(device)
-        self.fc_same_dim = LinearSameDim(emb_size).to(device)
+        # self.fc_same_dim = LinearSameDim(emb_size).to(device)
 
     def make_src_mask(self, src):
         src_mask = src.transpose(0, 1) == self.src_pad_idx
@@ -171,7 +171,7 @@ class ImageTransformer(nn.Module):
         # trf_out = F.relu(trf_out)
         # out_embeddings = self.fc_same_dim(trf_out)
         out = self.fc(trf_out)
-        out = F.relu(out)
+        # out = F.relu(out)
 
         return trf_out, out
 

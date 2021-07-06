@@ -97,6 +97,10 @@ def get_data_stats(data):
     stats = f'Mean:\t{data.mean()}\nStd:\t{data.std()}\nMax:\t{data.max()}\nMin:\t{data.min()}'
     return stats
 
+def check_data_ordering(vocab, src, tgt, seq_len=10):
+    for i in range(seq_len):
+        print((vocab[src[i].item()] == tgt[i]).all())
+
 def compare_weights(epoch, old_state_dict, new_state_dict):
     changed = {}
     for key in old_state_dict:

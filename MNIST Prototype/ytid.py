@@ -5,7 +5,6 @@ import torch
 from torch import nn
 import torch.nn.functional as F
 import os
-from data_processing import get_embedding_from_vocab, get_succession, get_target_images, append_tokens, process_labels
 import wandb
 
 class YTID(pl.LightningModule):
@@ -59,40 +58,40 @@ class YTID(pl.LightningModule):
         feature_vecs = self.transformer_step(src_seq, tgt_seq, self.t_opt)
 
         # Discriminator Forward
-        self.discriminator_step(feature_vecs.detach(), images, self.d_opt)
+        # self.discriminator_step(feature_vecs.detach(), images, self.d_opt)
 
         # Generator Forward
-        pred_imgs = self.generator_step(feature_vecs.detach(), src_seq[1:], self.g_opt)
+        # pred_imgs = self.generator_step(feature_vecs.detach(), src_seq[1:], self.g_opt)
         
         # Log generated images
-        _, pil_img = img_to_PIL(pred_imgs)
-        wandb.log({self.phase+'/out_image': wandb.Image(pil_img)})
+        # _, pil_img = img_to_PIL(pred_imgs)
+        # wandb.log({self.phase+'/out_image': wandb.Image(pil_img)})
 
         # Increase phase step (for logging)
         self.step[self.phase] += 1
 
-    def validation_step(self, batch, batch_idx):
+    # def validation_step(self, batch, batch_idx):
 
-        self.phase = 'val'
+    #     self.phase = 'val'
         
-        # Data loading
-        images, src_seq, tgt_seq = batch
+    #     # Data loading
+    #     images, src_seq, tgt_seq = batch
         
-        # Transformer Forward
-        feature_vecs = self.transformer_step(src_seq, tgt_seq, self.t_opt)
+    #     # Transformer Forward
+    #     feature_vecs = self.transformer_step(src_seq, tgt_seq, self.t_opt)
 
-        # Discriminator Forward
-        self.discriminator_step(feature_vecs.detach(), images, self.d_opt)
+    #     # Discriminator Forward
+    #     # self.discriminator_step(feature_vecs.detach(), images, self.d_opt)
 
-        # Generator Forward
-        pred_imgs = self.generator_step(feature_vecs.detach(), src_seq[1:], self.g_opt)
+    #     # Generator Forward
+    #     # pred_imgs = self.generator_step(feature_vecs.detach(), src_seq[1:], self.g_opt)
         
-        # Log generated images
-        _, pil_img = img_to_PIL(pred_imgs)
-        wandb.log({self.phase+'/out_image': wandb.Image(pil_img)})
+    #     # Log generated images
+    #     # _, pil_img = img_to_PIL(pred_imgs)
+    #     # wandb.log({self.phase+'/out_image': wandb.Image(pil_img)})
 
-        # Increase phase step (for logging)
-        self.step[self.phase] += 1
+    #     # Increase phase step (for logging)
+    #     self.step[self.phase] += 1
 
     def transformer_step(self, src, tgt, opt):
 
@@ -119,19 +118,21 @@ class YTID(pl.LightningModule):
         # Compute losses
         cls_loss = self.classification_loss(out_classes[:-1], src[1:-1])
         emb_loss = self.reconstruction_loss(trf_out, tgt[1:])
-        trf_loss = (emb_loss * 10) + cls_loss
+        trf_loss = emb_loss + cls_loss
+
+        # trf_loss = torch.abs(trf_out).sum()
 
         # Log metrics
         log_metric(self, self.phase+'/acc_out', acc_out, self.step[self.phase], True)
         log_metric(self, self.phase+'/loss_emb', emb_loss, self.step[self.phase])
-        log_metric(self, self.phase+'/loss_cls', cls_loss, self.step[self.phase])
+        log_metric(self, self.phase+'/loss_cls', cls_loss, self.step[self.phase], True)
         log_metric(self, self.phase+'/loss_trf', trf_loss, self.step[self.phase], True)
 
 
         # Backward
         if self.phase == 'train':
             # Clip Gradients
-            torch.nn.utils.clip_grad_norm_(self.img_transformer.parameters(), max_norm=1)
+            # torch.nn.utils.clip_grad_norm_(self.img_transformer.parameters(), max_norm=1)
             opt.zero_grad()
             self.manual_backward(trf_loss)
             opt.step()

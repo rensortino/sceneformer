@@ -1,6 +1,4 @@
 from datetime import datetime
-from log_utils import SummaryWriter
-from data_processing import build_vocab
 from feature_extractor import ResNet18
 import math
 import json
@@ -8,6 +6,7 @@ import torch
 from ytid import YTID
 from layers import *
 from attrdict import AttrDict
+import argparse
 from log_utils import Logging
 from layers import ImageGenerator, Discriminator
 import os
@@ -17,6 +16,87 @@ from data_modules import MNISTDataModule, CIFAR10DataModule
 import pytorch_lightning as pl
 
 import wandb
+
+def get_args_parser():
+    parser = argparse.ArgumentParser('Set YTID', add_help=False)
+
+    # * Training Parameters
+    parser.add_argument('--t_lr', default=1e-4, type=float)
+    parser.add_argument('--g_lr', default=1e-5, type=float)
+    parser.add_argument('--d_lr', default=1e-5, type=float)
+    parser.add_argument('--lr_backbone', default=1e-5, type=float)
+    parser.add_argument('--batch_size', default=64, type=int)
+    parser.add_argument('--seq_len', default=8, type=int)
+    parser.add_argument('--weight_decay', default=1e-4, type=float)
+    parser.add_argument('--epochs', default=300, type=int)
+    parser.add_argument('--lr_drop', default=200, type=int)
+    parser.add_argument('--clip_max_norm', default=0.1, type=float,
+                        help='gradient clipping max norm')
+
+    # * Backbone
+    parser.add_argument('--backbone', default='resnet18', type=str,
+                        help="Name of the convolutional backbone to use")
+    parser.add_argument('--position_embedding', default='sine', type=str, choices=('sine', 'learned'),
+                        help="Type of positional embedding to use on top of the image features")
+    parser.add_argument('--backbone_ckpt', default='', type=str,
+                        help="Path of the saved weights for the backbone")
+
+    # * Transformer
+    parser.add_argument('--enc_layers', default=6, type=int,
+                        help="Number of encoding layers in the transformer")
+    parser.add_argument('--dec_layers', default=6, type=int,
+                        help="Number of decoding layers in the transformer")
+    parser.add_argument('--ff_dim', default=2048, type=int,
+                        help="Intermediate size of the feedforward layers in the transformer blocks")
+    parser.add_argument('--emb_dim', default=512, type=int,
+                        help="Size of the embeddings (dimension of the transformer)")
+    parser.add_argument('--dropout', default=0.1, type=float,
+                        help="Dropout applied in the transformer")
+    parser.add_argument('--nheads', default=8, type=int,
+                        help="Number of attention heads inside the transformer's attentions")
+
+    # * GAN
+    parser.add_argument('--ngf', default=16, type=int,
+                        help="Number of Generator filters")
+    parser.add_argument('--ndf', default=16, type=int,
+                        help="Number of Discriminator filters")
+
+    # * Dataset parameters        
+    parser.add_argument('--data_module', default='mnist',
+                        help="Name of the Pytorch Lightning DataModule to load")
+    parser.add_argument('--data_path', default="data/",
+                        help="Directory where data is stored")
+    parser.add_argument('--validation_split', default=0.1, type=float,
+                        help="Fraction of data to put in validation")
+    parser.add_argument('--num_workers', default=2, type=int)
+    parser.add_argument('--persistent_workers', action='store_true')
+
+    # * Data parameters
+    parser.add_argument('--num_classes', default='10', type=str,
+                        help="Number of classes in the dataset")
+    parser.add_argument('--img_w', default=32, type=int,
+                        help="Image width")
+    parser.add_argument('--img_h', default=32, type=int,
+                        help="Image height")
+    parser.add_argument('--num_channels', default=1, type=str,
+                        help="Number of channels of the images")
+
+    # * Other parameters
+    parser.add_argument('--output_dir', default='output',
+                        help='path where to save, empty for no saving')
+    parser.add_argument('--save_weights_every', default=3,
+                        help='Frequency to save weights')
+    parser.add_argument('--device', default='cuda',
+                        help='device to use for training / testing')
+    parser.add_argument('--seed', default=42, type=int)
+    parser.add_argument('--resume', default='', help='resume from checkpoint')
+    parser.add_argument('--start_epoch', default=0, type=int, metavar='N',
+                        help='start epoch')
+    parser.add_argument('--eval', action='store_true')
+    parser.add_argument('--debug', action='store_true')
+
+
+    return parser
 
 def main(args):
 
@@ -119,7 +199,7 @@ def main(args):
         logger=tb_logger,
         # default_hp_metric=False,
         # fast_dev_run=True,
-        # overfit_batches=0.001, # 1% of training set used as batch to make it overfit
+        overfit_batches=0.0025, # 1% of training set used as batch to make it overfit
         # limit_train_batches=0.25, # 10% of training data
         # limit_val_batches=0.0011641443538998836, # 10% of validation data
         num_sanity_val_steps=0,
@@ -139,7 +219,12 @@ def main(args):
         model.load_state_dict(checkpoint['model'])
         trainer.current_epoch = checkpoint['epoch']
 
-    trainer.fit(model, data_module)
+    try:
+        trainer.fit(model, data_module)
+    finally:
+        print('Exiting...')
+        wandb.finish()
+
     
 if __name__ == '__main__':
     with open("config/mnist.json") as conf:
