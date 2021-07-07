@@ -1,4 +1,5 @@
 import math
+import numpy as np
 from torch import nn
 import torch.nn.functional as F
 import torch
@@ -20,7 +21,7 @@ class ImageGenerator(nn.Module):
                 layers.append(nn.Tanh())
             else:
                 layers.append(nn.BatchNorm2d(out_feat))
-                layers.append(nn.ReLU(True))
+                layers.append(nn.LeakyReLU(0.2, True))
 
             return layers
 
@@ -35,33 +36,79 @@ class ImageGenerator(nn.Module):
         x = x.view(x.size(0) * x.size(1), self.emb_size, 1, 1)
         return self.model(x)
 
-class Discriminator(nn.Module):
-    def __init__(self, emb_size=1024, ndf=64, channels=3):
-        super(Discriminator, self).__init__()
+# class Discriminator(nn.Module):
+#     def __init__(self, emb_size=1024, ndf=64, channels=3):
+#         super(Discriminator, self).__init__()
 
-        self.emb_size = emb_size
+#         self.emb_size = emb_size
 
-        def block(in_feat, out_feat, kernel, stride, pad, last=False):
-            layers = [nn.Conv2d(in_feat, out_feat, kernel, stride, pad, bias=False)]
-            if last:
-                layers.append(nn.Sigmoid())
-            else:
-                if not in_feat == channels: # Skip normalization for the first block
-                    layers.append(nn.BatchNorm2d(out_feat))
-                layers.append(nn.LeakyReLU(0.2, True))
+#         def block(in_feat, out_feat, kernel, stride, pad, last=False):
+#             layers = [nn.Conv2d(in_feat, out_feat, kernel, stride, pad, bias=False)]
+#             if last:
+#                 layers.append(nn.Sigmoid())
+#             else:
+#                 if not in_feat == channels: # Skip normalization for the first block
+#                     layers.append(nn.BatchNorm2d(out_feat))
+#                 layers.append(nn.LeakyReLU(0.2, True))
                 
+#             return layers
+
+#         self.model = nn.Sequential(
+#             *block(channels, ndf, 4, 2, 1),
+#             *block(ndf, ndf * 2, 4, 2, 1),
+#             *block(ndf * 2, ndf * 4, 4, 2, 1),
+#             *block(ndf * 4, channels, 4, 2, 0, last=True),
+#             # *block(ndf * 8, 1, 4, 1, 0, last=True)
+#         )
+
+#     def forward(self, x):
+#         return self.model(x).squeeze(3).squeeze(2)
+
+
+class Generator(nn.Module):
+    def __init__(self, latent_dim, img_shape):
+        super().__init__()
+        self.img_shape = img_shape
+
+        def block(in_feat, out_feat, normalize=True):
+            layers = [nn.Linear(in_feat, out_feat)]
+            if normalize:
+                layers.append(nn.BatchNorm1d(out_feat, 0.8))
+            layers.append(nn.LeakyReLU(0.2, inplace=True))
             return layers
 
         self.model = nn.Sequential(
-            *block(channels, ndf, 4, 2, 1),
-            *block(ndf, ndf * 2, 4, 2, 1),
-            *block(ndf * 2, ndf * 4, 4, 2, 1),
-            *block(ndf * 4, channels, 4, 2, 0, last=True),
-            # *block(ndf * 8, 1, 4, 1, 0, last=True)
+            *block(latent_dim, 128, normalize=False),
+            *block(128, 256),
+            *block(256, 512),
+            *block(512, 1024),
+            nn.Linear(1024, int(np.prod(img_shape))),
+            nn.Tanh()
         )
 
-    def forward(self, x):
-        return self.model(x).squeeze(3).squeeze(2)
+    def forward(self, z):
+        img = self.model(z)
+        img = img.view(img.size(0), *self.img_shape)
+        return img
+
+class Discriminator(nn.Module):
+    def __init__(self, img_shape):
+        super().__init__()
+
+        self.model = nn.Sequential(
+            nn.Linear(int(np.prod(img_shape)), 512),
+            nn.LeakyReLU(0.2, inplace=True),
+            nn.Linear(512, 256),
+            nn.LeakyReLU(0.2, inplace=True),
+            nn.Linear(256, 1),
+            nn.Sigmoid(),
+        )
+
+    def forward(self, img):
+        img_flat = img.view(img.size(0), -1)
+        validity = self.model(img_flat)
+
+        return validity
 
 class PositionalEncoding(nn.Module):
 
@@ -83,15 +130,6 @@ class PositionalEncoding(nn.Module):
         x = x * math.sqrt(self.emb_size)
         x = x + self.pe[:x.size(0), :]
         return self.dropout(x)
-
-class LinearSameDim(nn.Module):
-    "Define standard linear + relu generation step."
-    def __init__(self, d_model):
-        super(LinearSameDim, self).__init__()
-        self.proj = nn.Linear(d_model, d_model)
-
-    def forward(self, x):
-        return F.relu(self.proj(x))
 
 class ImageTransformer(nn.Module):
     def __init__(self,  emb_size,
@@ -156,11 +194,7 @@ class ImageTransformer(nn.Module):
         src = self.pos_enc(src)
 
         seq_len, bs = targets.shape[0], targets.shape[1]
-
-        # targets = targets.reshape(-1, self.data_options.n_channels, *self.image_size)
-        # with torch.no_grad():
-        # targets = self.tgt_embedding(targets, True)
-        # targets = targets.reshape(seq_len, bs, -1)
+        
         targets = self.pos_enc(targets)
 
         # Forward transformer
@@ -168,12 +202,39 @@ class ImageTransformer(nn.Module):
         targets = targets.to(self.device)
         tgt_mask = self.transformer.generate_square_subsequent_mask(seq_len).to(self.device)
         trf_out = self.transformer(src, targets, tgt_mask=tgt_mask)
-        # trf_out = F.relu(trf_out)
-        # out_embeddings = self.fc_same_dim(trf_out)
         out = self.fc(trf_out)
-        # out = F.relu(out)
+        out = F.relu(out)
 
         return trf_out, out
+
+
+class NoamOpt:
+    "Optim wrapper that implements rate."
+    def __init__(self, model_size, factor, warmup, optimizer):
+        self.optimizer = optimizer
+        self._step = 0
+        self.warmup = warmup
+        self.factor = factor
+        self.model_size = model_size
+        self._rate = 0
+        
+    def step(self):
+        "Update parameters and rate"
+        self._step += 1
+        rate = self.rate()
+        for p in self.optimizer.param_groups:
+            p['lr'] = rate
+        self._rate = rate
+        self.optimizer.step()
+        
+    def rate(self, step = None):
+        "Implement `lrate` above"
+        if step is None:
+            step = self._step
+        return self.factor * \
+            (self.model_size ** (-0.5) *
+            min(step ** (-0.5), step * self.warmup ** (-1.5)))
+        
 
 def test_model_size(model, x):
     for i, m in enumerate(model):

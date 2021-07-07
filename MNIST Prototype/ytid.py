@@ -1,10 +1,13 @@
 
+from data_processing import extract_features
+from layers import NoamOpt
 import pytorch_lightning as pl
 from log_utils import get_data_stats, img_to_PIL, log_metric, log_prediction, save_weights, compare_weights
 import torch
 from torch import nn
 import torch.nn.functional as F
 import os
+from torchvision.utils import make_grid
 import wandb
 
 class YTID(pl.LightningModule):
@@ -35,7 +38,13 @@ class YTID(pl.LightningModule):
         self.img_gen = img_gen
         self.discriminator = disc
 
-        # self.init_weights()
+        # Transformer Optimizer
+        warmup = 400
+        # self.t_opt = NoamOpt(img_transformer.emb_size, 1, warmup,
+        #     torch.optim.Adam(img_transformer.parameters(), lr=args.optimizer.t_lr, betas=(0.9, 0.98), eps=1e-9))
+        self.t_opt = torch.optim.Adam(img_transformer.parameters(), lr=args.optimizer.t_lr, betas=(0.9, 0.98), eps=1e-9)
+
+        self.init_t_weights()
 
     def forward(self, src, targets):
 
@@ -43,16 +52,22 @@ class YTID(pl.LightningModule):
 
         return out
 
-    def training_step(self, batch, batch_idx, optimizer_idx):
+    def init_t_weights(self):
+        for n, p in self.img_transformer.named_parameters():
+            if p.dim() > 1 and 'tgt_embedding' not in n:
+                nn.init.xavier_uniform(p)
+
+    def training_step(self, batch, batch_idx):
 
         self.phase = 'train'
 
         # Define Optimizers
-        self.t_opt, self.g_opt, self.d_opt = self.optimizers()
-        t_sch, g_sch, d_sch = self.lr_schedulers()
+        self.g_opt, self.d_opt = self.optimizers()
+        g_sch, d_sch = self.lr_schedulers()
 
         # Data loading
-        images, src_seq, tgt_seq = batch
+        images, src_seq, tgt_images = batch
+        tgt_seq = extract_features(self.feature_extractor, tgt_images)
         
         # Transformer Forward
         feature_vecs = self.transformer_step(src_seq, tgt_seq, self.t_opt)
@@ -60,12 +75,15 @@ class YTID(pl.LightningModule):
         # Discriminator Forward
         # self.discriminator_step(feature_vecs.detach(), images, self.d_opt)
 
-        # Generator Forward
+        # # Generator Forward
         # pred_imgs = self.generator_step(feature_vecs.detach(), src_seq[1:], self.g_opt)
         
-        # Log generated images
+        # # Log generated images
         # _, pil_img = img_to_PIL(pred_imgs)
+        # pil_img = pil_img.resize((64,64))
         # wandb.log({self.phase+'/out_image': wandb.Image(pil_img)})
+        # grid = make_grid(pred_imgs[:6]) 
+        # self.logger.experiment.add_image('out images', grid, self.step[self.phase])
 
         # Increase phase step (for logging)
         self.step[self.phase] += 1
@@ -81,14 +99,15 @@ class YTID(pl.LightningModule):
     #     feature_vecs = self.transformer_step(src_seq, tgt_seq, self.t_opt)
 
     #     # Discriminator Forward
-    #     # self.discriminator_step(feature_vecs.detach(), images, self.d_opt)
+    #     self.discriminator_step(feature_vecs.detach(), images, self.d_opt)
 
     #     # Generator Forward
-    #     # pred_imgs = self.generator_step(feature_vecs.detach(), src_seq[1:], self.g_opt)
+    #     pred_imgs = self.generator_step(feature_vecs.detach(), src_seq[1:], self.g_opt)
         
     #     # Log generated images
-    #     # _, pil_img = img_to_PIL(pred_imgs)
-    #     # wandb.log({self.phase+'/out_image': wandb.Image(pil_img)})
+    #     _, pil_img = img_to_PIL(pred_imgs)
+    #     pil_img = pil_img.resize((64,64))
+    #     wandb.log({self.phase+'/out_image': wandb.Image(pil_img)})
 
     #     # Increase phase step (for logging)
     #     self.step[self.phase] += 1
@@ -101,7 +120,7 @@ class YTID(pl.LightningModule):
         trf_out, out_classes = self(src, tgt[:-1])
         
         # Extract features
-        out_classes = self.feature_extractor.linear(trf_out)
+        # out_classes = self.feature_extractor.linear(trf_out)
         with torch.no_grad():
             tgt_features = self.feature_extractor.linear(tgt)
 
@@ -113,14 +132,12 @@ class YTID(pl.LightningModule):
             o.write(f'\n\nStats before linear:\nTarget:\n{get_data_stats(tgt)}\n\Output:\n{get_data_stats(trf_out)}')
             o.write(f'\n\nStats After Linear:\nTarget{get_data_stats(tgt_features)}\nOutput:\n{get_data_stats(out_classes)}')
 
-            acc_out = (tgt_features[1:-1].argmax(2) == out_classes[:-1].argmax(2)).sum() / (out_classes[:-1].shape[0] * out_classes[:-1].shape[1])
+            acc_out = (tgt_features[1:].argmax(2) == out_classes.argmax(2)).sum() / (out_classes.shape[0] * out_classes.shape[1])
         
         # Compute losses
-        cls_loss = self.classification_loss(out_classes[:-1], src[1:-1])
-        emb_loss = self.reconstruction_loss(trf_out, tgt[1:])
+        cls_loss = self.classification_loss(out_classes, src[1:])
+        emb_loss = self.reconstruction_loss(trf_out, tgt[1:]) 
         trf_loss = emb_loss + cls_loss
-
-        # trf_loss = torch.abs(trf_out).sum()
 
         # Log metrics
         log_metric(self, self.phase+'/acc_out', acc_out, self.step[self.phase], True)
@@ -176,7 +193,7 @@ class YTID(pl.LightningModule):
         predictions = self.img_gen(feature_vec)
         
         # Normalize like the original MNIST images
-        predictions = (predictions - predictions.min()) / (predictions.max() - predictions.min())
+        # predictions = (predictions - predictions.min()) / (predictions.max() - predictions.min())
         # pred_vectors = self.feature_extractor(predictions)
         # pred_classes = self.feature_extractor.linear(pred_vectors)
         # tgt_vectors = self.feature_extractor(tgt_images[1:].reshape(-1,1,32,32), True)
@@ -238,18 +255,20 @@ class YTID(pl.LightningModule):
         for name,params in self.named_parameters():
             self.logger.experiment.add_histogram(name, params, self.current_epoch)
 
-    def training_epoch_end(self,outputs):
-        self.custom_histogram_adder()
+    def training_epoch_end(self, outputs):
+        # FIXME Change
+        if (self.current_epoch + 1) % self.args.trainer.log_every_n_steps == 0:
+            self.custom_histogram_adder()
 
-        # Zero metrics
-        # phase_metrics = {name: 0.0 for name in self.metric_names}
-        # self.metrics = { p: phase_metrics for p in ['train', 'val', 'test'] }
-        torch.save({
-                'epoch': self.current_epoch,
-                'model' : self.state_dict(),
-                't_opt' : self.t_opt.state_dict(),
-                'g_opt' : self.g_opt.state_dict()
-                }, os.path.join(self.args.trainer.weight_dir, 'checkpoint.pt'))
+            # Zero metrics
+            # phase_metrics = {name: 0.0 for name in self.metric_names}
+            # self.metrics = { p: phase_metrics for p in ['train', 'val', 'test'] }
+            torch.save({
+                    'epoch': self.current_epoch,
+                    'model' : self.state_dict(),
+                    't_opt' : self.t_opt.state_dict(),
+                    'g_opt' : self.g_opt.state_dict()
+                    }, os.path.join(self.args.trainer.weight_dir, 'checkpoint.pt'))
 
 
 
@@ -260,15 +279,15 @@ class YTID(pl.LightningModule):
 
     def configure_optimizers(self):
         if self.args.optimizer.type == 'Adam':
-            t_optimizer = torch.optim.Adam(self.img_transformer.parameters(), lr=self.args.optimizer.t_lr)
-            g_optimizer = torch.optim.Adam(self.img_gen.parameters(), lr=self.args.optimizer.g_lr)
-            d_optimizer = torch.optim.Adam(self.discriminator.parameters(), lr=self.args.optimizer.d_lr)
+            # t_optimizer = torch.optim.Adam(self.img_transformer.parameters(), lr=self.args.optimizer.t_lr, betas=(0.9, 0.98), eps=1e-9)
+            g_optimizer = torch.optim.Adam(self.img_gen.parameters(), lr=self.args.optimizer.g_lr, betas=(0.9, 0.98), eps=1e-9)
+            d_optimizer = torch.optim.SGD(self.discriminator.parameters(), lr=self.args.optimizer.d_lr)
         else:
             raise Exception(f'Optimizer {self.args.optimizer.type} not supported')
 
-        t_scheduler = torch.optim.lr_scheduler.StepLR(t_optimizer, 1.0, gamma=0.95)
+        # t_scheduler = torch.optim.lr_scheduler.StepLR(t_optimizer, 1.0, gamma=0.95)
         g_scheduler = torch.optim.lr_scheduler.StepLR(g_optimizer, 1.0, gamma=0.95)
         d_scheduler = torch.optim.lr_scheduler.StepLR(d_optimizer, 1.0, gamma=0.95)
 
 
-        return [t_optimizer, g_optimizer, d_optimizer], [t_scheduler, g_scheduler, d_scheduler]
+        return [g_optimizer, d_optimizer], [g_scheduler, d_scheduler]

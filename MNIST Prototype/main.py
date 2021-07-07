@@ -1,5 +1,5 @@
 from datetime import datetime
-from feature_extractor import ResNet18
+from feature_extractor import ResNet18, ResNet18CPU
 import math
 import json
 import torch
@@ -112,12 +112,16 @@ def main(args):
     # image_size = (args.data.img_w * int(math.sqrt(args.model.seq_len)), args.data.img_h * int(math.sqrt(args.model.seq_len)))
     image_size = (args.data.img_w, args.data.img_h)
 
+    feature_extractor = ResNet18(args.model.fe_weights_path, num_classes=args.model.num_classes)
+
+    feature_extractor_cpu = ResNet18CPU(args.model.fe_weights_path, args.model.num_classes)
+
     # Data Loading
 
     if args.name == "MNIST":
-        data_module = MNISTDataModule(args.data, image_size)
+        data_module = MNISTDataModule(args.data, image_size, feature_extractor_cpu, debug=args.debug)
     elif args.name == "CIFAR10":
-        data_module = CIFAR10DataModule(args.data)
+        data_module = CIFAR10DataModule(args.data, feature_extractor_cpu, debug=args.debug)
 
     # Logging
     
@@ -128,7 +132,7 @@ def main(args):
 
     hparams = dict(
         name = args.name,
-        nhid = args.model.ff_dim, # the dimension of the feedforward network model in nn.TransformerEncoder
+        ff_dim = args.model.ff_dim, # the dimension of the feedforward network model in nn.TransformerEncoder
         nlayers = args.model.n_layers, # the number of nn.TransformerEncoderLayer in nn.TransformerEncoder
         nheads = args.model.n_heads, # the number of heads in the multiheadattention models
         dropout = args.model.dropout, # the dropout value
@@ -139,12 +143,12 @@ def main(args):
         d_lr = args.optimizer.d_lr,
         emb_size = args.model.emb_size,
         img_size = args.data.img_h,
-        one_batch = args.trainer.debug_one_batch,
+        one_batch = args.overfit_batches,
         ngf = args.model.ngf,
         ndf = args.model.ndf
     )
 
-    if args.test:
+    if args.debug:
         run_mode = "disabled"
         run_name = "Test"
         run_notes = "Testing..."
@@ -154,6 +158,8 @@ def main(args):
         run_name = input("Name your run: ")
         run_notes = input("Describe your run: ")
 
+    
+
     wandb.init(
         config=hparams,
         notes=run_notes,
@@ -162,7 +168,7 @@ def main(args):
     )
 
     tb_logger = pl.loggers.TensorBoardLogger(
-        save_dir="pl_logs",
+        save_dir="logs",
         name=run_name,
         version=formatted_date,
         log_graph=True,
@@ -171,7 +177,6 @@ def main(args):
 
     # Modules Instances
 
-    feature_extractor = ResNet18(args.model.fe_weights_path, 16)
     transformer = ImageTransformer(
             args.model.emb_size,
             args.model.n_heads,
@@ -184,11 +189,17 @@ def main(args):
             args.device,
             feature_extractor
         ).to(args.device)
-    disc = Discriminator(args.model.emb_size, ndf=16, channels=args.data.n_channels)
+    disc = Discriminator(args.model.emb_size, ndf=args.model.ndf, channels=args.data.n_channels)
     img_gen = ImageGenerator(image_size, emb_size=args.model.emb_size, ngf=args.model.ngf, channels=args.data.n_channels).to(args.device)
 
     data_module.setup()
     example_input = data_module.get_example_batch()
+
+    batches_fraction = 0.0
+    limit_val_batches = 1.0
+    if args.overfit_batches:
+        limit_val_batches = 0.0
+        batches_fraction = math.ceil(args.data.batch_size / len(data_module.train_dataset))
 
     model = YTID(hparams, transformer, img_gen, disc, feature_extractor, example_input, args).to(args.device)
 
@@ -199,9 +210,9 @@ def main(args):
         logger=tb_logger,
         # default_hp_metric=False,
         # fast_dev_run=True,
-        overfit_batches=0.0025, # 1% of training set used as batch to make it overfit
+        overfit_batches=batches_fraction,
         # limit_train_batches=0.25, # 10% of training data
-        # limit_val_batches=0.0011641443538998836, # 10% of validation data
+        limit_val_batches=limit_val_batches, # 10% of validation data
         num_sanity_val_steps=0,
         flush_logs_every_n_steps=20,
         progress_bar_refresh_rate=20,
@@ -227,7 +238,7 @@ def main(args):
 
     
 if __name__ == '__main__':
-    with open("config/mnist.json") as conf:
+    with open("config/cifar.json") as conf:
         args = AttrDict(json.load(conf))
 
     main(args)

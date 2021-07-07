@@ -1,19 +1,20 @@
 {
     "name": "MNIST",
     "n_gpu": 1,
-    "test": false,
+    "debug": false,
+    "overfit_batches": true,
 
     "model": {
         "type": "Transformer",
-        "ff_dim" : 1024,
+        "ff_dim" : 2048,
         "emb_size": 512,
-        "n_layers" : 2,
+        "n_layers" : 4,
         "n_heads" : 8,       
         "dropout" : 0.2,
         "fe_weights_path": "ckpt/mnist/resnet18_16classes.pt",
         "num_classes": 16,
-        "ndf": 16,
-        "ngf": 16
+        "ndf": 64,
+        "ngf": 64
     },
     "data": {
         "type": "MnistDataLoader",
@@ -26,12 +27,12 @@
         "n_channels": 1,
         "persistent_workers": true,
         "validation_split": 0.1,
-        "num_workers": 1
+        "num_workers": 16
     },
     "optimizer": {
         "type": "Adam",
-        "g_lr" : 1e-5,
-        "d_lr" : 1e-5,
+        "g_lr" : 1e-6,
+        "d_lr" : 1e-6,
         "t_lr" : 1e-4,
         "weight_decay": 0,
         "amsgrad": true
@@ -47,8 +48,7 @@
     },
 
     "trainer": {
-        "epochs": 3000,
-        "debug_one_batch": true,
+        "epochs": 10000,
         "resume": false,
         "log_weights_change": false,
 

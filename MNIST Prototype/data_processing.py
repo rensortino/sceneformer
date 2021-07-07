@@ -13,6 +13,13 @@ def get_embedding_from_vocab(src, vocab):
 
     return embedding.reshape(*src.shape, -1)
 
+def extract_features(backbone, images):
+    seq_len, bs = images.shape[:2]
+    images = images.reshape(-1, *list(images.shape[2:]))
+    with torch.no_grad():
+        targets = backbone(images)
+        targets = targets.reshape(seq_len, bs, -1)
+    return targets
 
 def get_target_images(images, TOKENS):
     
@@ -33,8 +40,8 @@ def get_target_images(images, TOKENS):
 
     
 
-    sos_token = torch.full([1] + list(images.shape[1:]), TOKENS['SOS'], device=images.device)
-    eos_token = torch.full([1] + list(images.shape[1:]), TOKENS['EOS'], device=images.device)
+    sos_token = torch.full([1] + list(images.shape[1:]), TOKENS['sos'], device=images.device)
+    eos_token = torch.full([1] + list(images.shape[1:]), TOKENS['eos'], device=images.device)
     tgt_images = torch.cat((sos_token, images, eos_token))
 
     return tgt_images
@@ -42,7 +49,7 @@ def get_target_images(images, TOKENS):
 
 def process_labels(labels, sos_token, eos_token):
     '''
-    labels: [bs, seq_len]
+    labels: [seq_len, bs]
     '''
     labels = labels.t()
     in_list = append_tokens(labels.tolist(), eos_token, sos_token)
@@ -95,7 +102,7 @@ def get_bboxes(img_seq):
     return bboxes
     # img_grids = pad_sequence(img_grids, 6, torch.zeros(img_grids[0].shape))
 
-def get_img_grids(img_seq, n_channels):
+def get_img_grid(img_seq, n_channels):
     '''
     img_ seq = [seq_len, c, h, w] = [4, 16, 16]
     '''
@@ -106,7 +113,7 @@ def get_img_grids(img_seq, n_channels):
         # Place the image in the right quadrant
         grid[i] = img
         # Construct the grid from the batch of images
-        img_grid = make_grid(grid.cpu(), nrow=2, padding=0)
+        img_grid = make_grid(grid.cpu(), nrow=seq_len // 2, padding=0)
 
         if n_channels == 1:
             # Take the first channel (Grayscale images, the channels are all the same)
@@ -116,7 +123,7 @@ def get_img_grids(img_seq, n_channels):
         else:
             raise Exception("Incorrect number of channels")
 
-    return torch.cat(img_grids).tolist()
+    return torch.cat(img_grids)
     # img_grids = pad_sequence(img_grids, 6, torch.zeros(img_grids[0].shape))
 
 def get_one_hot(labels):
