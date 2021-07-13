@@ -1,7 +1,9 @@
 
-from data_processing import extract_features
+from data_processing import extract_features, normalize
+import numpy as np
 from layers import NoamOpt
 import pytorch_lightning as pl
+from torchvision.utils import save_image
 from log_utils import get_data_stats, img_to_PIL, log_metric, log_prediction, save_weights, compare_weights
 import torch
 from torch import nn
@@ -45,17 +47,26 @@ class YTID(pl.LightningModule):
         self.t_opt = torch.optim.Adam(img_transformer.parameters(), lr=args.optimizer.t_lr, betas=(0.9, 0.98), eps=1e-9)
 
         self.init_t_weights()
+        self.init_g_weights()
 
     def forward(self, src, targets):
 
-        out = self.img_transformer(src, targets)
+        img_features = self.img_transformer(src, targets)
 
-        return out
+        # predictions = self.img_gen(img_features)
+        predictions = img_features
+
+        return predictions
 
     def init_t_weights(self):
         for n, p in self.img_transformer.named_parameters():
             if p.dim() > 1 and 'tgt_embedding' not in n:
                 nn.init.xavier_uniform(p)
+
+    def init_g_weights(self):
+        for n, p in self.img_gen.named_parameters():
+            if p.dim() > 1:
+                nn.init.kaiming_uniform(p)
 
     def training_step(self, batch, batch_idx):
 
@@ -67,26 +78,24 @@ class YTID(pl.LightningModule):
 
         # Data loading
         images, src_seq, tgt_images = batch
+        # with torch.no_grad():
         tgt_seq = extract_features(self.feature_extractor, tgt_images)
         
         # Transformer Forward
         feature_vecs = self.transformer_step(src_seq, tgt_seq, self.t_opt)
+        # classes = self.feature_extractor.linear(feature_vecs)
 
         # Discriminator Forward
         # self.discriminator_step(feature_vecs.detach(), images, self.d_opt)
 
-        # # Generator Forward
-        # pred_imgs = self.generator_step(feature_vecs.detach(), src_seq[1:], self.g_opt)
-        
-        # # Log generated images
-        # _, pil_img = img_to_PIL(pred_imgs)
-        # pil_img = pil_img.resize((64,64))
-        # wandb.log({self.phase+'/out_image': wandb.Image(pil_img)})
-        # grid = make_grid(pred_imgs[:6]) 
-        # self.logger.experiment.add_image('out images', grid, self.step[self.phase])
+        # Generator Forward
+        pred_imgs = self.generator_step(feature_vecs.detach(), tgt_images[1:], self.g_opt)
+        # pred_imgs = images.unsqueeze(1)
 
         # Increase phase step (for logging)
         self.step[self.phase] += 1
+
+        return {'images': pred_imgs, 'gt': tgt_images}
 
     # def validation_step(self, batch, batch_idx):
 
@@ -117,34 +126,14 @@ class YTID(pl.LightningModule):
         # TODO Check if processed input is the same as original input (no alteration has been done)
 
         # Transformer decoder output is standardized
-        trf_out, out_classes = self(src, tgt[:-1])
-        
-        # Extract features
-        # out_classes = self.feature_extractor.linear(trf_out)
-        with torch.no_grad():
-            tgt_features = self.feature_extractor.linear(tgt)
+        trf_out = self.img_transformer(src, tgt[:-1])
 
-        # Logging output
-        with open(f'{self.args.trainer.output_dir}/{wandb.run.name}.txt', 'w') as o:
-            o.write(f'Input:\n{src}\n\Target:\n{tgt_features.argmax(2)}\n\nOutput:\n{out_classes.argmax(2)}\n')
-            o.write(f'\n\Embedding before linear;\nTarget:\n{tgt}\n\nOutput:\n{trf_out}')
-            o.write(f'\n\Embedding after linear;\nTarget:\n{tgt_features}\n\nOutput:\n{out_classes}')
-            o.write(f'\n\nStats before linear:\nTarget:\n{get_data_stats(tgt)}\n\Output:\n{get_data_stats(trf_out)}')
-            o.write(f'\n\nStats After Linear:\nTarget{get_data_stats(tgt_features)}\nOutput:\n{get_data_stats(out_classes)}')
-
-            acc_out = (tgt_features[1:].argmax(2) == out_classes.argmax(2)).sum() / (out_classes.shape[0] * out_classes.shape[1])
-        
         # Compute losses
-        cls_loss = self.classification_loss(out_classes, src[1:])
-        emb_loss = self.reconstruction_loss(trf_out, tgt[1:]) 
-        trf_loss = emb_loss + cls_loss
+        # cls_loss = self.classification_loss(out_classes, src[1:])
+        trf_loss = self.reconstruction_loss(trf_out, tgt[1:])
 
         # Log metrics
-        log_metric(self, self.phase+'/acc_out', acc_out, self.step[self.phase], True)
-        log_metric(self, self.phase+'/loss_emb', emb_loss, self.step[self.phase])
-        log_metric(self, self.phase+'/loss_cls', cls_loss, self.step[self.phase], True)
         log_metric(self, self.phase+'/loss_trf', trf_loss, self.step[self.phase], True)
-
 
         # Backward
         if self.phase == 'train':
@@ -184,10 +173,10 @@ class YTID(pl.LightningModule):
             self.manual_backward(disc_loss)
             opt.step()
 
-    def generator_step(self, feature_vec, labels, opt):
+    def generator_step(self, feature_vec, tgt_images, opt):
 
         # adversarial loss is binary cross-entropy
-        batch_size = feature_vec.shape[0] * feature_vec.shape[1]
+        batch_size = np.prod(feature_vec.shape[:2])
         real = torch.ones(batch_size, 1, device=self.args.device)
 
         predictions = self.img_gen(feature_vec)
@@ -199,7 +188,9 @@ class YTID(pl.LightningModule):
         # tgt_vectors = self.feature_extractor(tgt_images[1:].reshape(-1,1,32,32), True)
 
         # gen_loss = self.classification_loss(pred_classes, labels)
-        gen_loss = self.adversarial_loss(self.discriminator(predictions), real)
+        # gen_loss = self.adversarial_loss(self.discriminator(predictions), real)
+        tgt_images = normalize(tgt_images, -1, 1)
+        gen_loss = self.gen_loss(predictions[-2], tgt_images[-2])
         log_metric(self, self.phase+'/loss_gen', gen_loss, self.step[self.phase], True)
 
         if self.phase == 'train':
@@ -227,18 +218,36 @@ class YTID(pl.LightningModule):
         loss = criterion(outputs, targets)
         return loss
 
-
     def reconstruction_loss(self, outputs, targets):
 
         criterion = nn.MSELoss()
 
-        targets = targets.reshape(targets.shape[0] * targets.shape[1], -1).to(self.args.device)
-        outputs = outputs.reshape(targets.shape).to(self.args.device)
+        # targets = targets.reshape(targets.shape[0] * targets.shape[1], -1).to(self.args.device)
+        # outputs = outputs.reshape(targets.shape).to(self.args.device)
 
         # Normalize output
         # outputs = (outputs - outputs.min()) / (outputs.max() - outputs.min())
 
-        loss = criterion(outputs, targets)        
+        loss = criterion(outputs, targets)
+
+        # Take the mean over all dims but the sequence dim
+        # Then, sum per sequence, to avoid the model to generate a result
+        # mediated over sequence elements
+        return loss
+
+
+    def gen_loss(self, outputs, targets):
+
+        criterion = nn.MSELoss()
+
+        # targets = targets.reshape(targets.shape[0] * targets.shape[1], -1).to(self.args.device)
+        # outputs = outputs.reshape(targets.shape).to(self.args.device)
+
+        # Normalize output
+        # outputs = (outputs - outputs.min()) / (outputs.max() - outputs.min())
+
+        loss = criterion(outputs, targets)
+        # loss = loss.mean()
         return loss
 
     def classification_loss(self, outputs, targets):
@@ -260,15 +269,30 @@ class YTID(pl.LightningModule):
         if (self.current_epoch + 1) % self.args.trainer.log_every_n_steps == 0:
             self.custom_histogram_adder()
 
+            out_image = outputs[-1]['images']
+            gt = outputs[-1]['gt']
+
+            # Log generated images
+            _, pil_img = img_to_PIL(out_image[-2])
+            pil_img = pil_img.resize((256,256))
+            _, pil_gt = img_to_PIL(gt[-2])
+            pil_gt = pil_gt.resize((256,256))
+            wandb.log({self.phase+'/out_image': wandb.Image(pil_img)})
+            wandb.log({self.phase+'/gt': wandb.Image(pil_gt)})
+
+            grid = make_grid(out_image[-2,:6])
+            self.logger.experiment.add_image('out images', grid, self.step[self.phase])
+
+
             # Zero metrics
             # phase_metrics = {name: 0.0 for name in self.metric_names}
             # self.metrics = { p: phase_metrics for p in ['train', 'val', 'test'] }
-            torch.save({
-                    'epoch': self.current_epoch,
-                    'model' : self.state_dict(),
-                    't_opt' : self.t_opt.state_dict(),
-                    'g_opt' : self.g_opt.state_dict()
-                    }, os.path.join(self.args.trainer.weight_dir, 'checkpoint.pt'))
+            # torch.save({
+            #         'epoch': self.current_epoch,
+            #         'model' : self.state_dict(),
+            #         't_opt' : self.t_opt.state_dict(),
+            #         'g_opt' : self.g_opt.state_dict()
+            #         }, os.path.join(self.args.trainer.weight_dir, 'checkpoint.pt'))
 
 
 
@@ -280,7 +304,7 @@ class YTID(pl.LightningModule):
     def configure_optimizers(self):
         if self.args.optimizer.type == 'Adam':
             # t_optimizer = torch.optim.Adam(self.img_transformer.parameters(), lr=self.args.optimizer.t_lr, betas=(0.9, 0.98), eps=1e-9)
-            g_optimizer = torch.optim.Adam(self.img_gen.parameters(), lr=self.args.optimizer.g_lr, betas=(0.9, 0.98), eps=1e-9)
+            g_optimizer = torch.optim.SGD(self.img_gen.parameters(), lr=self.args.optimizer.g_lr)#, betas=(0.9, 0.98), eps=1e-9)
             d_optimizer = torch.optim.SGD(self.discriminator.parameters(), lr=self.args.optimizer.d_lr)
         else:
             raise Exception(f'Optimizer {self.args.optimizer.type} not supported')

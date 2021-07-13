@@ -78,17 +78,72 @@ class Generator(nn.Module):
             return layers
 
         self.model = nn.Sequential(
-            *block(latent_dim, 128, normalize=False),
-            *block(128, 256),
-            *block(256, 512),
-            *block(512, 1024),
+            *block(128, 256, normalize=False),
+            *block(256, 512, normalize=False),
+            *block(512, 1024, normalize=False),
             nn.Linear(1024, int(np.prod(img_shape))),
             nn.Tanh()
         )
 
+        self.reduction = nn.Sequential(
+            nn.Conv2d(512, 256, 1),
+            nn.BatchNorm2d(256),
+            nn.ReLU(),
+            nn.Conv2d(256, 128, 1),
+            nn.BatchNorm2d(128),
+            nn.ReLU(),
+            nn.Conv2d(128, 64, 1),
+            nn.BatchNorm2d(64),
+            nn.ReLU(),
+            nn.Conv2d(64, 32, 1),
+            nn.BatchNorm2d(32),
+            nn.ReLU()
+        )
+
     def forward(self, z):
+        seq_len, bs = z.shape[:2]
+        z = z.reshape(np.prod(z.shape[:2]), 512, 2,2)
+        z = self.reduction(z)
+        z = z.reshape(40, -1)
+        # z = self.encoder(z)
         img = self.model(z)
-        img = img.view(img.size(0), *self.img_shape)
+        img = img.view(seq_len, bs, *self.img_shape)
+        return img
+
+
+
+class GeneratorOld(nn.Module):
+    def __init__(self, latent_dim, img_shape):
+        super().__init__()
+        self.img_shape = img_shape
+
+        self.encoder = nn.Sequential(
+            nn.Linear(latent_dim,128),
+            nn.ReLU(True),
+            nn.Linear(128, 64),
+            nn.ReLU(True), nn.Linear(64, 12), nn.ReLU(True), nn.Linear(12, 3))
+
+        def block(in_feat, out_feat, normalize=True):
+            layers = [nn.Linear(in_feat, out_feat)]
+            if normalize:
+                layers.append(nn.BatchNorm1d(out_feat, 0.8))
+            layers.append(nn.LeakyReLU(0.2, inplace=True))
+            return layers
+
+        self.model = nn.Sequential(
+            *block(3, 12, normalize=False),
+            *block(12, 64, normalize=False),
+            *block(64, 128, normalize=False),
+            nn.Linear(128, int(np.prod(img_shape))),
+            nn.Tanh()
+        )
+
+    def forward(self, z):
+        seq_len, bs = z.shape[:2]
+        z = z.reshape(np.prod(z.shape[:2]), -1)
+        z = self.encoder(z)
+        img = self.model(z)
+        img = img.view(seq_len, bs, *self.img_shape)
         return img
 
 class Discriminator(nn.Module):
@@ -166,6 +221,7 @@ class ImageTransformer(nn.Module):
 
         self.pos_enc = PositionalEncoding(emb_size, dropout).to(device)
         self.src_embedding = torch.nn.Embedding(src_vocab_size, emb_size).to(device)
+        self.dim_reduction = nn.Linear(8192, self.emb_size)
         # self.tgt_embedding = torch.nn.Embedding(tgt_vocab_size, emb_size).to(device)
         self.tgt_embedding = feature_extractor
         self.fc = nn.Linear(emb_size, tgt_vocab_size).to(device)
@@ -194,6 +250,10 @@ class ImageTransformer(nn.Module):
         src = self.pos_enc(src)
 
         seq_len, bs = targets.shape[0], targets.shape[1]
+
+        # targets = targets.reshape(np.prod(targets.shape[:2]), -1)
+        # targets = self.dim_reduction(targets)
+        # targets = targets.reshape(seq_len, bs, -1)
         
         targets = self.pos_enc(targets)
 
@@ -202,10 +262,8 @@ class ImageTransformer(nn.Module):
         targets = targets.to(self.device)
         tgt_mask = self.transformer.generate_square_subsequent_mask(seq_len).to(self.device)
         trf_out = self.transformer(src, targets, tgt_mask=tgt_mask)
-        out = self.fc(trf_out)
-        out = F.relu(out)
 
-        return trf_out, out
+        return trf_out
 
 
 class NoamOpt:

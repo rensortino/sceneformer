@@ -31,9 +31,9 @@
     },
     "optimizer": {
         "type": "Adam",
-        "g_lr" : 1e-6,
+        "g_lr" : 1e-3,
         "d_lr" : 1e-6,
-        "t_lr" : 1e-4,
+        "t_lr" : 1e-3,
         "weight_decay": 0,
         "amsgrad": true
     },

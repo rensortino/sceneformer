@@ -8,3 +8,4 @@ wandb
 *.txt
 weights
 *pth
+img

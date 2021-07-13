@@ -47,19 +47,20 @@ class MNISTDataModule(pl.LightningDataModule):
 
         src_seq = process_labels(labels, tokens['src']['sos'], tokens['src']['eos'])
 
-        with torch.no_grad():
-            tgt_features = self.backbone(images)
-        tgt_features = tgt_features.reshape(self.args.seq_len, self.args.seq_bs, -1)
-        # sos_token = torch.full([1] + list(data.shape[1:]), tokens['src']['sos'], device=images.device)
-        # eos_token = torch.full([1] + list(data.shape[1:]), tokens['src']['eos'], device=images.device)
+        for i in range(data.shape[1]):
+            img_grid = get_img_grid(data[:,i], self.args.n_channels)
+            img_grid = img_grid.unsqueeze(1)
+            if i == 0:
+                img_grids = img_grid
+            else:
+                img_grids = torch.cat((img_grids, img_grid), dim=1)
 
-        sos = self.embedding(torch.tensor(tokens['src']['sos'], device=images.device))
-        eos = self.embedding(torch.tensor(tokens['src']['eos'], device=images.device))
+        sos_token = img_grids[0].clone().uniform_(0.6,0.9).unsqueeze(0)
+        eos_token = img_grids[0].clone().uniform_(0.1,0.4).unsqueeze(0)
 
-        sos = sos.unsqueeze(0).unsqueeze(0).repeat(1,16,1)
-        eos = eos.unsqueeze(0).unsqueeze(0).repeat(1,16,1)
-        tgt_seq = torch.cat((sos, tgt_features, eos))
-        tgt_seq = get_embedding_from_vocab(src_seq, self.vocab)
+        tgt_seq = torch.cat((sos_token, img_grids, eos_token))
+
+        # tgt_seq = get_embedding_from_vocab(src_seq, self.vocab)
 
         return images, src_seq, tgt_seq
 
@@ -88,7 +89,9 @@ class MNISTDataModule(pl.LightningDataModule):
             self.test_dataset = datasets.MNIST(self.data_dir, train=False, transform=self.transforms)
 
     def get_example_batch(self):
-        return next(iter(DataLoader(self.train_dataset, batch_size=self.args.batch_size, drop_last=True, collate_fn=self.custom_collate_fn)))[1:]
+        src_seq, tgt_images = next(iter(DataLoader(self.train_dataset, batch_size=self.args.batch_size, drop_last=True, collate_fn=self.custom_collate_fn)))[1:]
+        tgt_seq = extract_features(self.backbone, tgt_images)
+        return src_seq, tgt_seq
 
     def train_dataloader(self):
         return DataLoader(self.train_dataset, batch_size=self.args.batch_size, num_workers=self.args.num_workers, shuffle=True, persistent_workers=self.args.persistent_workers, drop_last=True, collate_fn=self.custom_collate_fn)
@@ -178,6 +181,7 @@ class CIFAR10DataModule(pl.LightningDataModule):
             dataset,
             batch_size=self.hparams.batch_size,
             num_workers=self.hparams.num_workers,
+            persistent_workers=self.hparams.persistent_workers,
             shuffle=True,
             drop_last=True,
             collate_fn=self.custom_collate_fn

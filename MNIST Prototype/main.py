@@ -1,5 +1,5 @@
 from datetime import datetime
-from feature_extractor import ResNet18, ResNet18CPU
+from feature_extractor import ResNet18
 import math
 import json
 import torch
@@ -21,6 +21,7 @@ def get_args_parser():
     parser = argparse.ArgumentParser('Set YTID', add_help=False)
 
     # * Training Parameters
+    parser.add_argument('--debug', action='store_true')
     parser.add_argument('--t_lr', default=1e-4, type=float)
     parser.add_argument('--g_lr', default=1e-5, type=float)
     parser.add_argument('--d_lr', default=1e-5, type=float)
@@ -114,14 +115,14 @@ def main(args):
 
     feature_extractor = ResNet18(args.model.fe_weights_path, num_classes=args.model.num_classes)
 
-    feature_extractor_cpu = ResNet18CPU(args.model.fe_weights_path, args.model.num_classes)
+    # feature_extractor_cpu = ResNet18CPU(args.model.fe_weights_path, args.model.num_classes)
 
     # Data Loading
 
     if args.name == "MNIST":
-        data_module = MNISTDataModule(args.data, image_size, feature_extractor_cpu, debug=args.debug)
+        data_module = MNISTDataModule(args.data, image_size, feature_extractor, debug=args.debug)
     elif args.name == "CIFAR10":
-        data_module = CIFAR10DataModule(args.data, feature_extractor_cpu, debug=args.debug)
+        data_module = CIFAR10DataModule(args.data, feature_extractor, debug=args.debug)
 
     # Logging
     
@@ -189,11 +190,15 @@ def main(args):
             args.device,
             feature_extractor
         ).to(args.device)
-    disc = Discriminator(args.model.emb_size, ndf=args.model.ndf, channels=args.data.n_channels)
-    img_gen = ImageGenerator(image_size, emb_size=args.model.emb_size, ngf=args.model.ngf, channels=args.data.n_channels).to(args.device)
+    # disc = Discriminator(args.model.emb_size, ndf=args.model.ngf, channels=args.data.n_channels)
+    # img_gen = ImageGenerator(image_size, emb_size=args.model.emb_size, ngf=args.model.ngf, channels=args.data.n_channels).to(args.device)
+
 
     data_module.setup()
     example_input = data_module.get_example_batch()
+
+    img_gen = Generator(args.model.emb_size, (args.data.n_channels, args.data.img_h * 2, args.data.img_w * 2))
+    disc = Discriminator((args.data.n_channels, args.data.img_h, args.data.img_w))
 
     batches_fraction = 0.0
     limit_val_batches = 1.0
@@ -204,6 +209,7 @@ def main(args):
     model = YTID(hparams, transformer, img_gen, disc, feature_extractor, example_input, args).to(args.device)
 
     # Define trainer module
+    
 
     trainer = pl.Trainer(
         gpus=args.n_gpu,
@@ -238,7 +244,7 @@ def main(args):
 
     
 if __name__ == '__main__':
-    with open("config/cifar.json") as conf:
+    with open("config/mnist.json") as conf:
         args = AttrDict(json.load(conf))
 
     main(args)

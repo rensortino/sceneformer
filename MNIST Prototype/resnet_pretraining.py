@@ -2,12 +2,14 @@ import torch
 
 from torchvision.models import resnet18
 from torch import nn
+import torchvision
 from torch.utils.data import DataLoader
 from torchvision.datasets import MNIST
 import pytorch_lightning as pl
 from pytorch_lightning.core.decorators import auto_move_data
 from sklearn.metrics import classification_report
 from torchvision.transforms import ToTensor
+from torchsummary import summary
 from tqdm.autonotebook import tqdm
 
 class ResNetMNIST(pl.LightningModule):
@@ -23,7 +25,10 @@ class ResNetMNIST(pl.LightningModule):
   
   def training_step(self, batch, batch_no):
     x, y = batch
+    res = torchvision.transforms.Resize((224,224))
+    x = res(x)
     logits = self(x)
+    summary(self.model, x.size())
     loss = self.loss(logits, y)
     return loss
   
@@ -37,6 +42,14 @@ def convert_weights_pl_to_pt(w_path, out_path):
         new_k = k[6:] #strip the model string
         new_sd[new_k] = state_dict[k]
     torch.save(new_sd, out_path)
+
+def test_model_size(model, x):
+  for i, n, p in enumerate(model.named_parameters):
+      print(f'Module: {i}')
+      print(f'Input: {x.shape}')
+      print(f'Layer: {p}')
+      x = model(x)
+      print(f'Output: {x.shape}\n')
 
 
 def get_prediction(x, model: pl.LightningModule):

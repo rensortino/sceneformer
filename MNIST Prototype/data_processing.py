@@ -13,12 +13,16 @@ def get_embedding_from_vocab(src, vocab):
 
     return embedding.reshape(*src.shape, -1)
 
+def normalize(x, low, up):
+    return (up - low) * (x - x.min()) / (x.max() - x.min()) + low
+
 def extract_features(backbone, images):
     seq_len, bs = images.shape[:2]
     images = images.reshape(-1, *list(images.shape[2:]))
     with torch.no_grad():
-        targets = backbone(images)
+        targets = backbone(images.cuda())
         targets = targets.reshape(seq_len, bs, -1)
+    
     return targets
 
 def get_target_images(images, TOKENS):

@@ -11,23 +11,6 @@ import os
 from torch.utils.tensorboard import SummaryWriter
 from torch.utils.tensorboard.summary import hparams
 
-class SummaryWriter(SummaryWriter):
-    def add_hparams(self, hparam_dict, metric_dict):
-        torch._C._log_api_usage_once("tensorboard.logging.add_hparams")
-        if type(hparam_dict) is not dict or type(metric_dict) is not dict:
-            raise TypeError('hparam_dict and metric_dict should be dictionary.')
-        exp, ssi, sei = hparams(hparam_dict, metric_dict)
-
-        logdir = self._get_file_writer().get_logdir()
-        
-        with SummaryWriter(log_dir=logdir) as w_hp:
-            w_hp.file_writer.add_summary(exp)
-            w_hp.file_writer.add_summary(ssi)
-            w_hp.file_writer.add_summary(sei)
-            for k, v in metric_dict.items():
-                w_hp.add_scalar(k, v)
-
-
 class Logging(Callback):
 
     def __init__(self, tb_logger):
@@ -38,7 +21,7 @@ class Logging(Callback):
     def on_epoch_start(self, trainer, pl_module):
         self.start_time = time.time()
         if pl_module.args.trainer.log_weights_change:
-            self.old_weights = save_weights(self.img_transformer)
+            self.old_weights = save_weights(pl_module.img_gen)
 
     def on_fit_start(self, trainer, pl_module):
         pass
@@ -48,8 +31,11 @@ class Logging(Callback):
     def on_epoch_end(self, trainer, pl_module):
         pl_module.log(f'{pl_module.phase}/Epoch Elapsed Time', time.time() - self.start_time)
         if pl_module.args.trainer.log_weights_change:
-            new_weights = save_weights(self.img_transformer)
-            compare_weights(self.current_epoch, self.old_weights, new_weights)
+            new_weights = save_weights(pl_module.img_gen)
+            # weights_changed(pl_module.current_epoch, self.old_weights, new_weights)
+            ratios = compare_weights(pl_module.current_epoch, self.old_weights, new_weights)
+            pl_module.log('update-weight-ratio', ratios.mean())
+
         # if pl_module.current_epoch == 0:
         #     # Log just once
         #     self.tb_logger.add_hparams(dict(pl_module.hparams), dict())
@@ -80,7 +66,7 @@ def img_to_PIL(img):
         arr_to_pil = lambda x: Image.fromarray(x.astype('uint8'), 'RGB')
 
     else:
-        raise Exception('Unsupported number of channels ({n_ch})')
+        raise Exception(f'Unsupported number of channels ({n_ch})')
 
         
     norm_img = (img_array - img_array.min()) / (img_array.max() - img_array.min()) * 255
@@ -101,7 +87,7 @@ def check_data_ordering(vocab, src, tgt, seq_len=10):
     for i in range(seq_len):
         print((vocab[src[i].item()] == tgt[i]).all())
 
-def compare_weights(epoch, old_state_dict, new_state_dict):
+def weights_changed(epoch, old_state_dict, new_state_dict):
     changed = {}
     for key in old_state_dict:
         module = key.split('.')[0]
@@ -120,6 +106,17 @@ def compare_weights(epoch, old_state_dict, new_state_dict):
         for module in changed:
             if(changed[module].any()):
                 out.write(f'Module {module} changed\n')
+
+def compare_weights(epoch, old_state_dict, new_state_dict):
+
+    ratios = []
+    for k in old_state_dict:
+        module = k.split('.')[0]
+        update = (new_state_dict[k].float() - old_state_dict[k].float()).norm()
+        param_scale = old_state_dict[k].float().norm()
+        ratio = update / param_scale
+        ratios.append(ratio.unsqueeze(0))
+    return torch.cat(ratios)
 
 
 def log_prediction(gt, tgt_box, pred, box, n_channels, seq_bs, logger, title : str = "Logged Image"):
