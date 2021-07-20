@@ -42,13 +42,13 @@ class MNISTDataModule(pl.LightningDataModule):
     def custom_collate_fn(self, batch):
         # tgt = [<SOS>, [embeddings], <EOS> (, [<PAD>] ) ]
         images, labels = torch.utils.data._utils.collate.default_collate(batch)
-        data = images.reshape(self.args.seq_len, self.args.seq_bs, self.args.n_channels, self.args.img_h, self.args.img_w)
+        data = images.reshape(self.args.seq_len, self.args.seq_bs, self.args.data.n_channels, self.args.data.img_h, self.args.data.img_w)
         labels = labels.reshape(self.args.seq_len, self.args.seq_bs)
 
         src_seq = process_labels(labels, tokens['src']['sos'], tokens['src']['eos'])
 
         for i in range(data.shape[1]):
-            img_grid = get_img_grid(data[:,i], self.args.n_channels)
+            img_grid = get_img_grid(data[:,i], self.args.data.n_channels)
             img_grid = img_grid.unsqueeze(1)
             if i == 0:
                 img_grids = img_grid
@@ -121,9 +121,9 @@ class CIFAR10DataModule(pl.LightningDataModule):
     def setup(self, stage=None):
         self.transforms = T.Compose(
             [
-                T.RandomCrop(32, padding=4),
-                T.Resize((self.hparams.img_h, self.hparams.img_w)),
-                T.RandomHorizontalFlip(),
+                # T.RandomCrop(32, padding=4),
+                T.Resize((self.hparams.data.img_h, self.hparams.data.img_w)),
+                # T.RandomHorizontalFlip(),
                 T.ToTensor(),
                 T.Normalize(self.mean, self.std),
             ]
@@ -141,7 +141,7 @@ class CIFAR10DataModule(pl.LightningDataModule):
     def custom_collate_fn(self, batch):
         # tgt = [<SOS>, [embeddings], <EOS> (, [<PAD>] ) ]
         images, labels = torch.utils.data._utils.collate.default_collate(batch)
-        data = images.reshape(self.hparams.seq_len, self.hparams.seq_bs, self.hparams.n_channels, self.hparams.img_h, self.hparams.img_w)
+        data = images.reshape(self.hparams.seq_len, self.hparams.seq_bs, self.hparams.data.n_channels, self.hparams.data.img_h, self.hparams.data.img_w)
         labels = labels.reshape(self.hparams.seq_len, self.hparams.seq_bs)
 
         src_seq = process_labels(labels, tokens['src']['sos'], tokens['src']['eos'])
@@ -158,7 +158,7 @@ class CIFAR10DataModule(pl.LightningDataModule):
         # sos = sos.unsqueeze(0).unsqueeze(0).repeat(1,16,1)
         # eos = eos.unsqueeze(0).unsqueeze(0).repeat(1,16,1)
         for i in range(data.shape[1]):
-            img_grid = get_img_grid(data[:,i], self.hparams.n_channels)
+            img_grid = get_img_grid(data[:,i], self.hparams.data.n_channels)
             img_grid = img_grid.unsqueeze(1)
             if i == 0:
                 img_grids = img_grid
@@ -193,7 +193,7 @@ class CIFAR10DataModule(pl.LightningDataModule):
             [
                 T.ToTensor(),
                 T.Normalize(self.mean, self.std),
-                T.Resize((self.hparams.img_h, self.hparams.img_w)),
+                T.Resize((self.hparams.data.img_h, self.hparams.data.img_w)),
             ]
         )
         dataset = datasets.CIFAR10(root=self.data_dir, train=False, transform=transform)

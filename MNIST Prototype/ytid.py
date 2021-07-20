@@ -25,7 +25,7 @@ class YTID(pl.LightningModule):
         super(YTID, self).__init__()
         self.hparams.update(hparams)
         self.automatic_optimization = False # disable automatic calling of backward()
-        self.max_seq_len = args.data.max_seq_len
+        self.max_seq_len = args.max_seq_len
         self.example_input_array = example_input
         self.feature_extractor = feature_extractor
         self.phase = None
@@ -43,8 +43,8 @@ class YTID(pl.LightningModule):
         # Transformer Optimizer
         warmup = 400
         # self.t_opt = NoamOpt(img_transformer.emb_size, 1, warmup,
-        #     torch.optim.Adam(img_transformer.parameters(), lr=args.optimizer.t_lr, betas=(0.9, 0.98), eps=1e-9))
-        self.t_opt = torch.optim.Adam(img_transformer.parameters(), lr=args.optimizer.t_lr, betas=(0.9, 0.98), eps=1e-9)
+        #     torch.optim.Adam(img_transformer.parameters(), lr=args.t_lr, betas=(0.9, 0.98), eps=1e-9))
+        self.t_opt = torch.optim.Adam(img_transformer.parameters(), lr=args.t_lr, betas=(0.9, 0.98), eps=1e-9)
 
         self.init_t_weights()
         self.init_g_weights()
@@ -210,7 +210,7 @@ class YTID(pl.LightningModule):
         targets = F.softmax(targets, dim=2)
         outputs = F.log_softmax(outputs, dim=2)
 
-        batch_size = self.args.model.seq_bs * (self.args.model.seq_len + 1)
+        batch_size = self.args.seq_bs * (self.args.seq_len + 1)
 
         outputs = outputs.reshape(batch_size, -1)
         targets = targets.reshape(batch_size, -1)
@@ -266,7 +266,7 @@ class YTID(pl.LightningModule):
 
     def training_epoch_end(self, outputs):
         # FIXME Change
-        if (self.current_epoch + 1) % self.args.trainer.log_every_n_steps == 0:
+        if (self.current_epoch + 1) % self.args.log_every_n_steps == 0:
             self.custom_histogram_adder()
 
             out_image = outputs[-1]['images']
@@ -292,7 +292,7 @@ class YTID(pl.LightningModule):
             #         'model' : self.state_dict(),
             #         't_opt' : self.t_opt.state_dict(),
             #         'g_opt' : self.g_opt.state_dict()
-            #         }, os.path.join(self.args.trainer.weight_dir, 'checkpoint.pt'))
+            #         }, os.path.join(self.args.weight_dir, 'checkpoint.pt'))
 
 
 
@@ -302,12 +302,12 @@ class YTID(pl.LightningModule):
         
 
     def configure_optimizers(self):
-        if self.args.optimizer.type == 'Adam':
-            # t_optimizer = torch.optim.Adam(self.img_transformer.parameters(), lr=self.args.optimizer.t_lr, betas=(0.9, 0.98), eps=1e-9)
-            g_optimizer = torch.optim.SGD(self.img_gen.parameters(), lr=self.args.optimizer.g_lr)#, betas=(0.9, 0.98), eps=1e-9)
-            d_optimizer = torch.optim.SGD(self.discriminator.parameters(), lr=self.args.optimizer.d_lr)
+        if self.args.opt == 'Adam':
+            # t_optimizer = torch.optim.Adam(self.img_transformer.parameters(), lr=self.args.t_lr, betas=(0.9, 0.98), eps=1e-9)
+            g_optimizer = torch.optim.SGD(self.img_gen.parameters(), lr=self.args.g_lr)#, betas=(0.9, 0.98), eps=1e-9)
+            d_optimizer = torch.optim.SGD(self.discriminator.parameters(), lr=self.args.d_lr)
         else:
-            raise Exception(f'Optimizer {self.args.optimizer.type} not supported')
+            raise Exception(f'Optimizer {self.args.type} not supported')
 
         # t_scheduler = torch.optim.lr_scheduler.StepLR(t_optimizer, 1.0, gamma=0.95)
         g_scheduler = torch.optim.lr_scheduler.StepLR(g_optimizer, 1.0, gamma=0.95)

@@ -221,7 +221,7 @@ class ImageTransformer(nn.Module):
 
         self.pos_enc = PositionalEncoding(emb_size, dropout).to(device)
         self.src_embedding = torch.nn.Embedding(src_vocab_size, emb_size).to(device)
-        self.dim_reduction = nn.Linear(8192, self.emb_size)
+        # self.dim_reduction = nn.Linear(8192, self.emb_size)
         # self.tgt_embedding = torch.nn.Embedding(tgt_vocab_size, emb_size).to(device)
         self.tgt_embedding = feature_extractor
         self.fc = nn.Linear(emb_size, tgt_vocab_size).to(device)

@@ -11,7 +11,8 @@ class ResNet18(nn.Module):
         if "mnist" in w_path:
             self.resnet.conv1 = nn.Conv2d(1, 64, kernel_size=(7, 7), stride=(2, 2), padding=(3, 3), bias=False)
         elif "cifar" in w_path:
-            self.resnet.conv1 = nn.Conv2d(3, 64, kernel_size=3, stride=1, padding=1, bias=False)
+            # self.resnet.conv1 = nn.Conv2d(3, 64, kernel_size=3, stride=1, padding=1, bias=False)
+            self.resnet.conv1 = nn.Conv2d(3, 64, kernel_size=(3,3), stride=(2,2), padding=(3,3), bias=False)
         self.resnet.load_state_dict(torch.load(w_path))
         self.avg = self.resnet.avgpool
         self.linear = self.resnet.fc

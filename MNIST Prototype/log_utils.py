@@ -20,7 +20,7 @@ class Logging(Callback):
 
     def on_epoch_start(self, trainer, pl_module):
         self.start_time = time.time()
-        if pl_module.args.trainer.log_weights_change:
+        if pl_module.args.log_weights_change:
             self.old_weights = save_weights(pl_module.img_gen)
 
     def on_fit_start(self, trainer, pl_module):
@@ -30,7 +30,7 @@ class Logging(Callback):
 
     def on_epoch_end(self, trainer, pl_module):
         pl_module.log(f'{pl_module.phase}/Epoch Elapsed Time', time.time() - self.start_time)
-        if pl_module.args.trainer.log_weights_change:
+        if pl_module.args.log_weights_change:
             new_weights = save_weights(pl_module.img_gen)
             # weights_changed(pl_module.current_epoch, self.old_weights, new_weights)
             ratios = compare_weights(pl_module.current_epoch, self.old_weights, new_weights)

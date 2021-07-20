@@ -1,65 +1,7 @@
 {
-    "name": "CIFAR10",
-    "n_gpu": 1,
-    "debug": true,
-    "overfit_batches": true,
-
-    "model": {
-        "type": "Transformer",
-        "ff_dim" : 2048,
-        "emb_size": 512,
-        "n_layers" : 4,
-        "n_heads" : 8,       
-        "dropout" : 0.2,
-        "fe_weights_path": "ckpt/cifar10/resnet18.pt",
-        "num_classes": 10,
-        "ndf": 64,
-        "ngf": 64
-    },
-    "data": {
-        "type": "CifarDataLoader",
-        "data_dir": "data/",
-        "batch_size": 128,
-        "seq_len" : 4,
-        "max_seq_len": 6,
-        "img_w": 32,
-        "img_h": 32,
-        "n_channels": 3,
-        "persistent_workers": true,
-        "validation_split": 0.1,
-        "num_workers": 16
-    },
-    "optimizer": {
-        "type": "Adam",
-        "g_lr" : 1e-3,
-        "d_lr" : 1e-6,
-        "t_lr" : 1e-3,
-        "weight_decay": 0,
-        "amsgrad": true
-    },
-    "metrics": [
-        "accuracy", "top_k_acc"
-    ],
-
-    "lr_scheduler": {
-        "type": "StepLR",
-        "step_size": 50,
-        "gamma": 0.1
-    },
-
-    "trainer": {
-        "epochs": 10000,
-        "resume": false,
-        "log_weights_change": false,
-
-        "output_dir": "output",
-        "weight_dir": "weights",
-        "tensorboard_dir": "tb_logs",
-
-        "save_dir": "saved/",
-        "save_period": 1,
-        "verbosity": 2,
-
-        "log_every_n_steps": 20
-    }
+    "img_w": 28,
+    "img_h": 28,
+    "n_channels": 3,
+    "backbone_ckpt": "ckpt/cifar10/resnet18.pt",
+    "n_classes": 10
 }
