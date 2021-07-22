@@ -97,31 +97,27 @@ class YTID(pl.LightningModule):
 
         return {'images': pred_imgs, 'gt': tgt_images}
 
-    # def validation_step(self, batch, batch_idx):
+    def validation_step(self, batch, batch_idx):
 
-    #     self.phase = 'val'
+        self.phase = 'val'
         
-    #     # Data loading
-    #     images, src_seq, tgt_seq = batch
+        # Data loading
+        images, src_seq, tgt_images = batch
+        with torch.no_grad():
+            tgt_seq = extract_features(self.feature_extractor, tgt_images)
         
-    #     # Transformer Forward
-    #     feature_vecs = self.transformer_step(src_seq, tgt_seq, self.t_opt)
+            # Transformer Forward
+            feature_vecs = self.transformer_step(src_seq, tgt_seq)
+            # Generator Forward
+            pred_imgs = self.generator_step(feature_vecs.detach(), tgt_images[1:])
+        # classes = self.feature_extractor.linear(feature_vecs)
 
-    #     # Discriminator Forward
-    #     self.discriminator_step(feature_vecs.detach(), images, self.d_opt)
+        # Increase phase step (for logging)
+        self.step[self.phase] += 1
 
-    #     # Generator Forward
-    #     pred_imgs = self.generator_step(feature_vecs.detach(), src_seq[1:], self.g_opt)
-        
-    #     # Log generated images
-    #     _, pil_img = img_to_PIL(pred_imgs)
-    #     pil_img = pil_img.resize((64,64))
-    #     wandb.log({self.phase+'/out_image': wandb.Image(pil_img)})
+        return {'images': pred_imgs, 'gt': tgt_images}
 
-    #     # Increase phase step (for logging)
-    #     self.step[self.phase] += 1
-
-    def transformer_step(self, src, tgt, opt):
+    def transformer_step(self, src, tgt, opt=None):
 
         # TODO Check if processed input is the same as original input (no alteration has been done)
 
