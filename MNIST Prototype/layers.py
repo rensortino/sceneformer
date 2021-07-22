@@ -1,8 +1,12 @@
 import math
 import numpy as np
 from torch import nn
+from torch.functional import Tensor
 import torch.nn.functional as F
 import torch
+from torch.nn.init import xavier_uniform_
+from torch.nn.modules.normalization import LayerNorm
+from torch.nn.modules.transformer import TransformerDecoder, TransformerDecoderLayer, TransformerEncoder, TransformerEncoderLayer
 import torchvision.transforms as T
 
 
@@ -202,14 +206,26 @@ class ImageTransformer(nn.Module):
         self.data_options = data_options
 
         # Transformer
-        self.transformer = nn.Transformer(
-            emb_size,
-            n_heads,
-            n_enc_layers,
-            n_dec_layers,
-            ff_dim,
-            dropout,
-        )
+        # self.transformer = nn.Transformer(
+        #     emb_size,
+        #     n_heads,
+        #     n_enc_layers,
+        #     n_dec_layers,
+        #     ff_dim,
+        #     dropout,
+        # )
+
+        norm = LayerNorm(emb_size)
+
+        # Encoder
+        encoder_layer = TransformerEncoderLayer(emb_size, n_heads, ff_dim, dropout)
+        self.encoder = TransformerEncoder(encoder_layer, n_enc_layers, norm)
+
+        # Decoder
+        decoder_layer = TransformerDecoderLayer(emb_size, n_heads, ff_dim, dropout)
+        self.decoder = TransformerDecoder(decoder_layer, n_dec_layers, norm)
+
+        self._init_parameters()
 
         self.emb_size = emb_size
         self.device = device
@@ -227,11 +243,53 @@ class ImageTransformer(nn.Module):
         self.fc = nn.Linear(emb_size, tgt_vocab_size).to(device)
         # self.fc_same_dim = LinearSameDim(emb_size).to(device)
 
+    def _init_parameters(self):
+        r"""Initiate parameters in the transformer model."""
+
+        for p in self.parameters():
+            if p.dim() > 1:
+                xavier_uniform_(p)
+
+    def generate_square_subsequent_mask(self, sz: int) -> Tensor:
+        r"""Generate a square mask for the sequence. The masked positions are filled with float('-inf').
+            Unmasked positions are filled with float(0.0).
+        """
+        mask = (torch.triu(torch.ones(sz, sz)) == 1).transpose(0, 1)
+        mask = mask.float().masked_fill(mask == 0, float('-inf')).masked_fill(mask == 1, float(0.0))
+        return mask
+
     def make_src_mask(self, src):
         src_mask = src.transpose(0, 1) == self.src_pad_idx
 
         # (N, src_len)
         return src_mask.to(self.device)
+
+    def encode(self, src, src_mask=None, src_key_padding_mask=None):
+
+        return self.encoder(src, mask=src_mask, src_key_padding_mask=src_key_padding_mask)
+
+    def decode(self, memory, memory_mask, tgt, tgt_mask, memory_key_padding_mask=None, tgt_key_padding_mask=None):
+        return self.decoder(tgt, memory, tgt_mask=tgt_mask, memory_mask=memory_mask,
+                              tgt_key_padding_mask=tgt_key_padding_mask,
+                              memory_key_padding_mask=memory_key_padding_mask)
+
+
+    def greedy_decode(self, src, src_mask, max_len, start_symbol):
+        memory = self.encode(src, src_mask)
+        # TODO Change first token generation
+        ys = torch.ones(1, 1).fill_(start_symbol).type_as(src)
+        for i in range(max_len-1):
+            out = self.decode(memory, src_mask, 
+                            ys, 
+                            self.generate_square_subsequent_mask(ys.size(1))
+                                        .type_as(src))
+            # TODO Change output handling
+            prob = self.generator(out[:, -1])
+            _, next_word = torch.max(prob, dim = 1)
+            next_word = next_word.data[0]
+            ys = torch.cat([ys, 
+                            torch.ones(1, 1).type_as(src.data).fill_(next_word)], dim=1)
+        return ys
 
     def forward(self, src, targets, src_key_padding_mask=None, tgt_key_padding_mask=None):
 
@@ -260,10 +318,12 @@ class ImageTransformer(nn.Module):
         # Forward transformer
         src = src.to(self.device)
         targets = targets.to(self.device)
-        tgt_mask = self.transformer.generate_square_subsequent_mask(seq_len).to(self.device)
-        trf_out = self.transformer(src, targets, tgt_mask=tgt_mask)
+        tgt_mask = self.generate_square_subsequent_mask(seq_len).to(self.device)
+        
+        memory = self.encode(src)
+        out = self.decode(memory, None, targets, tgt_mask)
 
-        return trf_out
+        return out
 
 
 class NoamOpt:

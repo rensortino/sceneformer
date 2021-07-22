@@ -169,7 +169,7 @@ class YTID(pl.LightningModule):
             self.manual_backward(disc_loss)
             opt.step()
 
-    def generator_step(self, feature_vec, tgt_images, opt):
+    def generator_step(self, feature_vec, tgt_images, opt=None):
 
         # adversarial loss is binary cross-entropy
         batch_size = np.prod(feature_vec.shape[:2])

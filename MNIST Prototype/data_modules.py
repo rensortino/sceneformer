@@ -115,6 +115,7 @@ class CIFAR10DataModule(pl.LightningDataModule):
         self.mean = (0.4914, 0.4822, 0.4465)
         self.std = (0.2471, 0.2435, 0.2616)
         self.backbone = backbone
+        self.debug = debug
         self.embedding = torch.nn.Embedding(16,512)
         
 
