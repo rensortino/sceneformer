@@ -99,11 +99,11 @@ def get_bboxes(img_seq):
     for i in range(seq_len):
         # bbox is computed fixed, it's arranged in a square grid 
         bbox = [w * (i % 2), h * (i  > 1), w, h] #[xywh]
-        # TODO Parametrize
-        rescaled = map(lambda x: x / 32, bbox)
+        # Divide by final size of the grid
+        rescaled = map(lambda x: x / (w * 2), bbox)
         bboxes.append(list(rescaled))
 
-    return bboxes
+    return torch.tensor(bboxes)
     # img_grids = pad_sequence(img_grids, 6, torch.zeros(img_grids[0].shape))
 
 def get_img_grid(img_seq, n_channels):

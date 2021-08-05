@@ -19,7 +19,7 @@ class YTID(pl.LightningModule):
                 img_transformer: nn.Module,
                 img_gen: nn.Module,
                 disc: nn.Module,
-                feature_extractor,
+                backbone,
                 example_input,
                 args):
         super(YTID, self).__init__()
@@ -27,7 +27,7 @@ class YTID(pl.LightningModule):
         self.automatic_optimization = False # disable automatic calling of backward()
         self.max_seq_len = args.max_seq_len
         self.example_input_array = example_input
-        self.feature_extractor = feature_extractor
+        self.backbone = backbone
         self.phase = None
 
         # Variables for logging
@@ -77,13 +77,15 @@ class YTID(pl.LightningModule):
         g_sch, d_sch = self.lr_schedulers()
 
         # Data loading
-        images, src_seq, tgt_images = batch
-        # with torch.no_grad():
-        tgt_seq = extract_features(self.feature_extractor, tgt_images)
+        images, src_seq, tgt_images, boxes = batch
+        with torch.no_grad():
+            tgt_features = extract_features(self.backbone, tgt_images)
+
+        tgt_seq = torch.cat((tgt_features, boxes), dim=2)
         
         # Transformer Forward
         feature_vecs = self.transformer_step(src_seq, tgt_seq, self.t_opt)
-        # classes = self.feature_extractor.linear(feature_vecs)
+        # classes = self.backbone.linear(feature_vecs)
 
         # Discriminator Forward
         # self.discriminator_step(feature_vecs.detach(), images, self.d_opt)
@@ -104,13 +106,13 @@ class YTID(pl.LightningModule):
         # Data loading
         images, src_seq, tgt_images = batch
         with torch.no_grad():
-            tgt_seq = extract_features(self.feature_extractor, tgt_images)
+            tgt_seq = extract_features(self.backbone, tgt_images)
         
             # Transformer Forward
             feature_vecs = self.transformer_step(src_seq, tgt_seq)
             # Generator Forward
             pred_imgs = self.generator_step(feature_vecs.detach(), tgt_images[1:])
-        # classes = self.feature_extractor.linear(feature_vecs)
+        # classes = self.backbone.linear(feature_vecs)
 
         # Increase phase step (for logging)
         self.step[self.phase] += 1
@@ -179,9 +181,9 @@ class YTID(pl.LightningModule):
         
         # Normalize like the original MNIST images
         # predictions = (predictions - predictions.min()) / (predictions.max() - predictions.min())
-        # pred_vectors = self.feature_extractor(predictions)
-        # pred_classes = self.feature_extractor.linear(pred_vectors)
-        # tgt_vectors = self.feature_extractor(tgt_images[1:].reshape(-1,1,32,32), True)
+        # pred_vectors = self.backbone(predictions)
+        # pred_classes = self.backbone.linear(pred_vectors)
+        # tgt_vectors = self.backbone(tgt_images[1:].reshape(-1,1,32,32), True)
 
         # gen_loss = self.classification_loss(pred_classes, labels)
         # gen_loss = self.adversarial_loss(self.discriminator(predictions), real)
