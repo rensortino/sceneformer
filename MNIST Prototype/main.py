@@ -1,8 +1,14 @@
 from datetime import datetime
-from feature_extractor import ResNet18
+
+import random
+from tokens import TokenContainer
+from resnet import resnet18_encoder, resnet18_decoder
 import math
 import json
+from pl_bolts.models.autoencoders import AE
+
 import torch
+import numpy as np
 from ytid import YTID
 from layers import *
 from attrdict import AttrDict
@@ -34,8 +40,8 @@ def get_args_parser():
 
     # * Optimizer
     parser.add_argument('--t_lr', default=1e-4, type=float)
-    parser.add_argument('--g_lr', default=1e-2, type=float)
-    parser.add_argument('--d_lr', default=1e-5, type=float)
+    parser.add_argument('--g_lr', default=1e-4, type=float)
+    parser.add_argument('--d_lr', default=1e-4, type=float)
     parser.add_argument('--opt', default="Adam", type=str)
     parser.add_argument('--lr_backbone', default=1e-5, type=float)
     parser.add_argument('--lr_drop', default=200, type=int)
@@ -98,7 +104,7 @@ def get_args_parser():
                         help='path where to save weigths, empty for no saving')
     parser.add_argument('--tb_dir', default='logs',
                         help='path where to save tensorboard logs')
-    parser.add_argument('--log_every_n_steps', default=25,
+    parser.add_argument('--log_every_n_steps', type=int, default=25,
                         help='Frequency to log gradients and images')
     parser.add_argument('--save_weights_every', default=3,
                         help='Frequency to save weights')
@@ -112,8 +118,18 @@ def get_args_parser():
 
     return parser
 
+def make_reproducible(seed=42):
+    torch.manual_seed(seed)
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.backends.cudnn.deterministic = True
+    torch.backends.cudnn.benchmark = False
+
+
 def main(args):
 
+    make_reproducible(args.seed)
+    
     # Setup
     assert args.emb_size % args.n_heads == 0, "Embedding size not divisible by number of heads"
     assert args.batch_size % args.seq_len == 0, "Batch size not divisible by sequence length"
@@ -126,14 +142,25 @@ def main(args):
     # image_size = (args.data.img_w * int(math.sqrt(args.seq_len)), args.data.img_h * int(math.sqrt(args.seq_len)))
     image_size = (args.data.img_w, args.data.img_h)
 
-    feature_extractor = ResNet18(args.data.backbone_ckpt, num_classes=args.data.n_classes)
+    ae = AE(input_height=32).from_pretrained('cifar10-resnet18')
+
+    # backbone = resnet18_encoder(True, True, args.data.backbone_ckpt, num_classes=args.data.n_classes)
+    backbone = nn.Sequential(
+        ae.encoder,
+        ae.fc
+    )
+
+    # Token generation
+    token_container = TokenContainer()
+    img_shape = (args.seq_bs, args.data.n_channels, *image_size)
+    token_container.set_img_token(img_shape)
+    token_container.set_box_token(args.seq_bs)
 
     # Data Loading
-
     if args.data_module == "mnist":
-        data_module = MNISTDataModule(args, image_size, feature_extractor, debug=args.debug)
+        data_module = MNISTDataModule(args, image_size, backbone, token_container, debug=args.debug)
     elif args.data_module == "cifar":
-        data_module = CIFAR10DataModule(args, feature_extractor, debug=args.debug)
+        data_module = CIFAR10DataModule(args, backbone, token_container, debug=args.debug)
 
     # Logging
     
@@ -190,7 +217,7 @@ def main(args):
 
     # Modules Instances
 
-    transformer = ImageTransformer(
+    img_transformer = ImageTransformer(
             args.emb_size,
             args.n_heads,
             args.n_enc_layers,
@@ -200,16 +227,18 @@ def main(args):
             args,
             image_size,
             args.device,
-            feature_extractor
+            backbone
         ).to(args.device)
     # disc = Discriminator(args.emb_size, ndf=args.ngf, channels=args.data.n_channels)
     # img_gen = ImageGenerator(image_size, emb_size=args.emb_size, ngf=args.ngf, channels=args.data.n_channels).to(args.device)
 
 
     data_module.setup()
+    # TODO Make separate for different collate_fn
     example_input = data_module.get_example_batch()
 
-    img_gen = Generator(args.emb_size, (args.data.n_channels, args.data.img_h * 2, args.data.img_w * 2))
+    # img_gen = resnet18_decoder(args.emb_size, (args.data.n_channels, args.data.img_h, args.data.img_w))
+    img_gen = ae.decoder
     disc = Discriminator((args.data.n_channels, args.data.img_h, args.data.img_w))
 
     batches_fraction = 0.0
@@ -218,7 +247,7 @@ def main(args):
         limit_val_batches = 0.0
         batches_fraction = math.ceil(args.batch_size / len(data_module.train_dataset))
 
-    model = YTID(hparams, transformer, img_gen, disc, feature_extractor, example_input, args).to(args.device)
+    model = YTID(hparams, img_transformer, img_gen, disc, backbone, token_container, example_input, args).to(args.device)
 
     # Define trainer module
     

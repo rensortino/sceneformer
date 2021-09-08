@@ -11,6 +11,8 @@ import os
 from torch.utils.tensorboard import SummaryWriter
 from torch.utils.tensorboard.summary import hparams
 
+#TODO Make logger class
+
 class Logging(Callback):
 
     def __init__(self, tb_logger):
@@ -40,18 +42,18 @@ class Logging(Callback):
         #     # Log just once
         #     self.tb_logger.add_hparams(dict(pl_module.hparams), dict())
 
+def img_to_PIL_grid(imgs):
+    for img in imgs:
+        _, pil_img = img_to_PIL(img)
+
 def img_to_PIL(img):
 
     '''
     img: shape [C, H, W]
     '''
 
-    if len(img.shape) > 4:
+    if len(img.shape) > 3:
         raise Exception("Too many dimensions in image to show")
-    if len(img.shape) == 4: 
-        # Get a random sample from the batch
-        idx = random.randint(0,img.shape[0] - 1) 
-        img = img[idx]
 
     if type(img) == torch.Tensor:
         img = img.cpu().detach()
@@ -156,3 +158,25 @@ def convert_weights_pl_to_pt(w_path, out_path):
         new_k = k[6:] #strip the model string
         new_sd[new_k] = state_dict[k]
     torch.save(new_sd, out_path)
+
+
+
+def log_images(outputs, tb_writer, step, phase):
+
+    out_image = outputs[-1]['images']
+    gt = outputs[-1]['gt'][1:-1]
+
+    # Log generated images, show first batch for both
+    grid = make_grid(out_image[:6], normalize=True)
+    _, pil_img = img_to_PIL(grid)
+    # pil_img = pil_img.resize((256,256))
+    tb_writer.add_image('out images', grid, step)
+    wandb.log({phase+'/out_image': wandb.Image(pil_img)})
+    
+    gt = gt.reshape(-1, *gt.shape[2:])
+    grid = make_grid(gt[:6], normalize=True)
+    _, pil_gt = img_to_PIL(grid)
+    # pil_gt = pil_gt.resize((256,256))
+
+    tb_writer.add_image('gt', grid, step)
+    wandb.log({phase+'/gt': wandb.Image(pil_gt)})

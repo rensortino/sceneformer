@@ -1,9 +1,10 @@
 import math
 import numpy as np
 from torch import nn
-from torch.functional import Tensor
+from torch.functional import Tensor, split
 import torch.nn.functional as F
 import torch
+from data_processing import *
 from torch.nn.init import xavier_uniform_
 from torch.nn.modules.normalization import LayerNorm
 from torch.nn.modules.transformer import TransformerDecoder, TransformerDecoderLayer, TransformerEncoder, TransformerEncoderLayer
@@ -40,116 +41,10 @@ class ImageGenerator(nn.Module):
         x = x.view(x.size(0) * x.size(1), self.emb_size, 1, 1)
         return self.model(x)
 
-# class Discriminator(nn.Module):
-#     def __init__(self, emb_size=1024, ndf=64, channels=3):
-#         super(Discriminator, self).__init__()
-
-#         self.emb_size = emb_size
-
-#         def block(in_feat, out_feat, kernel, stride, pad, last=False):
-#             layers = [nn.Conv2d(in_feat, out_feat, kernel, stride, pad, bias=False)]
-#             if last:
-#                 layers.append(nn.Sigmoid())
-#             else:
-#                 if not in_feat == channels: # Skip normalization for the first block
-#                     layers.append(nn.BatchNorm2d(out_feat))
-#                 layers.append(nn.LeakyReLU(0.2, True))
-                
-#             return layers
-
-#         self.model = nn.Sequential(
-#             *block(channels, ndf, 4, 2, 1),
-#             *block(ndf, ndf * 2, 4, 2, 1),
-#             *block(ndf * 2, ndf * 4, 4, 2, 1),
-#             *block(ndf * 4, channels, 4, 2, 0, last=True),
-#             # *block(ndf * 8, 1, 4, 1, 0, last=True)
-#         )
-
-#     def forward(self, x):
-#         return self.model(x).squeeze(3).squeeze(2)
-
-
-class Generator(nn.Module):
-    def __init__(self, latent_dim, img_shape):
-        super().__init__()
-        self.img_shape = img_shape
-
-        def block(in_feat, out_feat, normalize=True):
-            layers = [nn.Linear(in_feat, out_feat)]
-            if normalize:
-                layers.append(nn.BatchNorm1d(out_feat, 0.8))
-            layers.append(nn.LeakyReLU(0.2, inplace=True))
-            return layers
-
-        self.model = nn.Sequential(
-            *block(128, 256, normalize=False),
-            *block(256, 512, normalize=False),
-            *block(512, 1024, normalize=False),
-            nn.Linear(1024, int(np.prod(img_shape))),
-            nn.Tanh()
-        )
-
-        self.reduction = nn.Sequential(
-            nn.Conv2d(512, 256, 1),
-            nn.BatchNorm2d(256),
-            nn.ReLU(),
-            nn.Conv2d(256, 128, 1),
-            nn.BatchNorm2d(128),
-            nn.ReLU(),
-            nn.Conv2d(128, 64, 1),
-            nn.BatchNorm2d(64),
-            nn.ReLU(),
-            nn.Conv2d(64, 32, 1),
-            nn.BatchNorm2d(32),
-            nn.ReLU()
-        )
-
-    def forward(self, z):
-        seq_len, bs = z.shape[:2]
-        z = z.reshape(np.prod(z.shape[:2]), 512, 2,2)
-        z = self.reduction(z)
-        z = z.reshape(40, -1)
-        # z = self.encoder(z)
-        img = self.model(z)
-        img = img.view(seq_len, bs, *self.img_shape)
-        return img
-
-
-
-class GeneratorOld(nn.Module):
-    def __init__(self, latent_dim, img_shape):
-        super().__init__()
-        self.img_shape = img_shape
-
-        self.encoder = nn.Sequential(
-            nn.Linear(latent_dim,128),
-            nn.ReLU(True),
-            nn.Linear(128, 64),
-            nn.ReLU(True), nn.Linear(64, 12), nn.ReLU(True), nn.Linear(12, 3))
-
-        def block(in_feat, out_feat, normalize=True):
-            layers = [nn.Linear(in_feat, out_feat)]
-            if normalize:
-                layers.append(nn.BatchNorm1d(out_feat, 0.8))
-            layers.append(nn.LeakyReLU(0.2, inplace=True))
-            return layers
-
-        self.model = nn.Sequential(
-            *block(3, 12, normalize=False),
-            *block(12, 64, normalize=False),
-            *block(64, 128, normalize=False),
-            nn.Linear(128, int(np.prod(img_shape))),
-            nn.Tanh()
-        )
-
-    def forward(self, z):
-        seq_len, bs = z.shape[:2]
-        z = z.reshape(np.prod(z.shape[:2]), -1)
-        z = self.encoder(z)
-        img = self.model(z)
-        img = img.view(seq_len, bs, *self.img_shape)
-        return img
-
+    def init_weights(self):
+        for p in self.parameters():
+            if p.dim() > 1:
+                nn.init.kaiming_uniform_(p)
 class Discriminator(nn.Module):
     def __init__(self, img_shape):
         super().__init__()
@@ -225,30 +120,31 @@ class ImageTransformer(nn.Module):
         decoder_layer = TransformerDecoderLayer(emb_size, n_heads, ff_dim, dropout)
         self.decoder = TransformerDecoder(decoder_layer, n_dec_layers, norm)
 
-        self._init_parameters()
-
         self.emb_size = emb_size
         self.device = device
 
         self.image_size = image_size
 
+        # TODO Fix names
         src_vocab_size = 16
-        tgt_vocab_size = 16
+        tgt_vocab_size = 12
 
         self.pos_enc = PositionalEncoding(emb_size, dropout).to(device)
         self.src_embedding = torch.nn.Embedding(src_vocab_size, emb_size).to(device)
         # self.dim_reduction = nn.Linear(8192, self.emb_size)
         # self.tgt_embedding = torch.nn.Embedding(tgt_vocab_size, emb_size).to(device)
         self.tgt_embedding = feature_extractor
-        self.fc = nn.Linear(emb_size, tgt_vocab_size).to(device)
+
+        # emb_size includes both classes (12 = 10 + 2) and bbox coordinates (4)
+        self.fc = nn.Linear(emb_size - 4, tgt_vocab_size).to(device)
         # self.fc_same_dim = LinearSameDim(emb_size).to(device)
 
-    def _init_parameters(self):
-        r"""Initiate parameters in the transformer model."""
+        self.init_weights()
 
-        for p in self.parameters():
-            if p.dim() > 1:
-                xavier_uniform_(p)
+    def init_weights(self):
+        for n, p in self.named_parameters():
+            if p.dim() > 1 and 'tgt_embedding' not in n:
+                nn.init.xavier_uniform_(p)
 
     def generate_square_subsequent_mask(self, sz: int) -> Tensor:
         r"""Generate a square mask for the sequence. The masked positions are filled with float('-inf').
@@ -256,7 +152,7 @@ class ImageTransformer(nn.Module):
         """
         mask = (torch.triu(torch.ones(sz, sz)) == 1).transpose(0, 1)
         mask = mask.float().masked_fill(mask == 0, float('-inf')).masked_fill(mask == 1, float(0.0))
-        return mask
+        return mask.to(self.device)
 
     def make_src_mask(self, src):
         src_mask = src.transpose(0, 1) == self.src_pad_idx
@@ -273,22 +169,29 @@ class ImageTransformer(nn.Module):
                               tgt_key_padding_mask=tgt_key_padding_mask,
                               memory_key_padding_mask=memory_key_padding_mask)
 
+    def get_probs(self, logits):
+        return self.fc(logits)
 
-    def greedy_decode(self, src, src_mask, max_len, start_symbol):
+    def greedy_decode(self, src, src_mask=None, max_len=6, sos_img_tk=None, sos_box_tk=None):
+        src = self.src_embedding(src.int())
+        src = self.pos_enc(src)
         memory = self.encode(src, src_mask)
-        # TODO Change first token generation
-        ys = torch.ones(1, 1).fill_(start_symbol).type_as(src)
+
+        ys = torch.cat((sos_img_tk, sos_box_tk), dim=2).type_as(memory)
+
+        # ys = torch.ones(1, 1).fill_(start_symbol).type_as(src)
         for i in range(max_len-1):
             out = self.decode(memory, src_mask, 
                             ys, 
-                            self.generate_square_subsequent_mask(ys.size(1))
+                            self.generate_square_subsequent_mask(ys.size(0))
                                         .type_as(src))
-            # TODO Change output handling
-            prob = self.generator(out[:, -1])
-            _, next_word = torch.max(prob, dim = 1)
-            next_word = next_word.data[0]
-            ys = torch.cat([ys, 
-                            torch.ones(1, 1).type_as(src.data).fill_(next_word)], dim=1)
+
+            probs_and_boxes = self.fc(out)
+            probs, boxes = split_trf_output(probs_and_boxes)
+            _, classes = probs.max(dim=2)
+            print(classes)
+
+            ys = torch.cat([ys, out[-1].unsqueeze(0)])
         return ys
 
     def forward(self, src, targets, src_key_padding_mask=None, tgt_key_padding_mask=None):
@@ -308,23 +211,20 @@ class ImageTransformer(nn.Module):
         src = self.pos_enc(src)
 
         seq_len, bs = targets.shape[0], targets.shape[1]
-
-        # targets = targets.reshape(np.prod(targets.shape[:2]), -1)
-        # targets = self.dim_reduction(targets)
-        # targets = targets.reshape(seq_len, bs, -1)
         
         targets = self.pos_enc(targets)
 
         # Forward transformer
-        src = src.to(self.device)
-        targets = targets.to(self.device)
-        tgt_mask = self.generate_square_subsequent_mask(seq_len).to(self.device)
+        tgt_mask = self.generate_square_subsequent_mask(seq_len)
         
         memory = self.encode(src)
         out = self.decode(memory, None, targets, tgt_mask)
 
-        return out
+        features, boxes = split_trf_output(out)
 
+        logits = self.get_probs(features)
+
+        return features, logits, boxes
 
 class NoamOpt:
     "Optim wrapper that implements rate."

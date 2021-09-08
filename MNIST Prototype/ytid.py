@@ -1,10 +1,11 @@
 
-from data_processing import extract_features, normalize
+from pytorch_lightning.utilities.types import EPOCH_OUTPUT
+from data_processing import accuracy, extract_features, normalize, split_trf_output
 import numpy as np
 from layers import NoamOpt
 import pytorch_lightning as pl
 from torchvision.utils import save_image
-from log_utils import get_data_stats, img_to_PIL, log_metric, log_prediction, save_weights, compare_weights
+from log_utils import get_data_stats, img_to_PIL, log_images, log_metric, log_prediction, save_weights, compare_weights
 import torch
 from torch import nn
 import torch.nn.functional as F
@@ -20,6 +21,7 @@ class YTID(pl.LightningModule):
                 img_gen: nn.Module,
                 disc: nn.Module,
                 backbone,
+                token_container,
                 example_input,
                 args):
         super(YTID, self).__init__()
@@ -28,6 +30,7 @@ class YTID(pl.LightningModule):
         self.max_seq_len = args.max_seq_len
         self.example_input_array = example_input
         self.backbone = backbone
+        self.token_container = token_container
         self.phase = None
 
         # Variables for logging
@@ -40,17 +43,12 @@ class YTID(pl.LightningModule):
         self.img_gen = img_gen
         self.discriminator = disc
 
-        # Transformer Optimizer
-        warmup = 400
-        # self.t_opt = NoamOpt(img_transformer.emb_size, 1, warmup,
-        #     torch.optim.Adam(img_transformer.parameters(), lr=args.t_lr, betas=(0.9, 0.98), eps=1e-9))
+        
         self.t_opt = torch.optim.Adam(img_transformer.parameters(), lr=args.t_lr, betas=(0.9, 0.98), eps=1e-9)
-
-        self.init_t_weights()
-        self.init_g_weights()
 
     def forward(self, src, targets):
 
+        # FIXME Transformer output should be handled
         img_features = self.img_transformer(src, targets)
 
         # predictions = self.img_gen(img_features)
@@ -58,23 +56,12 @@ class YTID(pl.LightningModule):
 
         return predictions
 
-    def init_t_weights(self):
-        for n, p in self.img_transformer.named_parameters():
-            if p.dim() > 1 and 'tgt_embedding' not in n:
-                nn.init.xavier_uniform(p)
-
-    def init_g_weights(self):
-        for n, p in self.img_gen.named_parameters():
-            if p.dim() > 1:
-                nn.init.kaiming_uniform(p)
-
     def training_step(self, batch, batch_idx):
 
         self.phase = 'train'
 
         # Define Optimizers
         self.g_opt, self.d_opt = self.optimizers()
-        g_sch, d_sch = self.lr_schedulers()
 
         # Data loading
         images, src_seq, tgt_images, boxes = batch
@@ -84,14 +71,13 @@ class YTID(pl.LightningModule):
         tgt_seq = torch.cat((tgt_features, boxes), dim=2)
         
         # Transformer Forward
-        feature_vecs = self.transformer_step(src_seq, tgt_seq, self.t_opt)
-        # classes = self.backbone.linear(feature_vecs)
+        features, boxes = self.transformer_step(src_seq, tgt_seq, self.t_opt)
 
         # Discriminator Forward
-        # self.discriminator_step(feature_vecs.detach(), images, self.d_opt)
+        # self.discriminator_step(features.detach(), images, self.d_opt)
 
         # Generator Forward
-        pred_imgs = self.generator_step(feature_vecs.detach(), tgt_images[1:], self.g_opt)
+        pred_imgs = self.generator_step(features[:-1].detach(), tgt_images[1:-1], src_seq[1:-1], self.g_opt)
         # pred_imgs = images.unsqueeze(1)
 
         # Increase phase step (for logging)
@@ -104,15 +90,19 @@ class YTID(pl.LightningModule):
         self.phase = 'val'
         
         # Data loading
-        images, src_seq, tgt_images = batch
+        images, src_seq, tgt_images, boxes = batch
         with torch.no_grad():
-            tgt_seq = extract_features(self.backbone, tgt_images)
-        
-            # Transformer Forward
-            feature_vecs = self.transformer_step(src_seq, tgt_seq)
+            tgt_features = extract_features(self.backbone, tgt_images)
+
+            tgt_seq = torch.cat((tgt_features, boxes), dim=2)
+
+            features, boxes = self.transformer_step(src_seq, tgt_seq)
+
+            # Discriminator Forward
+            # self.discriminator_step(features.detach(), images, self.d_opt)
+
             # Generator Forward
-            pred_imgs = self.generator_step(feature_vecs.detach(), tgt_images[1:])
-        # classes = self.backbone.linear(feature_vecs)
+            pred_imgs = self.generator_step(features[:-1].detach(), tgt_images[1:-1], src_seq[1:-1], self.g_opt)
 
         # Increase phase step (for logging)
         self.step[self.phase] += 1
@@ -120,18 +110,24 @@ class YTID(pl.LightningModule):
         return {'images': pred_imgs, 'gt': tgt_images}
 
     def transformer_step(self, src, tgt, opt=None):
-
-        # TODO Check if processed input is the same as original input (no alteration has been done)
-
         # Transformer decoder output is standardized
-        trf_out = self.img_transformer(src, tgt[:-1])
+        features, logits, bbox = self.img_transformer(src, tgt[:-1])
 
         # Compute losses
-        # cls_loss = self.classification_loss(out_classes, src[1:])
-        trf_loss = self.reconstruction_loss(trf_out, tgt[1:])
+        cls_loss = self.classification_loss(logits, src[1:])
+        feature_loss = self.reconstruction_loss(features, tgt[1:, :, :-4])
+        box_loss = self.reconstruction_loss(bbox, tgt[1:, :, -4:])
+
+        trf_loss = 2*cls_loss + box_loss + 2*feature_loss
+
+        # probs = self.img_transformer.get_probs(logits)
+
+        #TODO Parametrize
+        trf_acc = accuracy(logits.reshape(-1, 12), src[1:].reshape(-1), topk=(1,))[0].item()
 
         # Log metrics
         log_metric(self, self.phase+'/loss_trf', trf_loss, self.step[self.phase], True)
+        log_metric(self, self.phase+'/acc_trf', trf_acc, self.step[self.phase], True)
 
         # Backward
         if self.phase == 'train':
@@ -141,12 +137,14 @@ class YTID(pl.LightningModule):
             self.manual_backward(trf_loss)
             opt.step()
 
-        return trf_out
+        return features, bbox
 
     def discriminator_step(self, feature_vecs, real_imgs, opt):
 
         # Generate fake samples
         predictions = self.img_gen(feature_vecs)
+        predictions = predictions[:-1]
+        batched_pred = predictions.reshape(np.prod(predictions.shape[:2]), *predictions.shape[2:])
 
         # Normalize to [-1, 1] range
         tgt_imgs = 2 * ((real_imgs - real_imgs.min()) / real_imgs.max() - real_imgs.min()) - 1
@@ -156,9 +154,9 @@ class YTID(pl.LightningModule):
         real_loss = self.adversarial_loss(self.discriminator(tgt_imgs), real)
 
         # how well can it label as fake?
-        fake = torch.zeros(predictions.size(0), 1, device=self.args.device)
+        fake = torch.zeros(batched_pred.size(0), 1, device=self.args.device)
         fake_loss = self.adversarial_loss(
-            self.discriminator(predictions.detach()), fake)
+            self.discriminator(batched_pred.detach()), fake)
 
         disc_loss = real_loss + fake_loss
 
@@ -171,30 +169,28 @@ class YTID(pl.LightningModule):
             self.manual_backward(disc_loss)
             opt.step()
 
-    def generator_step(self, feature_vec, tgt_images, opt=None):
+    def generator_step(self, feature_vec, tgt_images, labels, opt=None):
 
         # adversarial loss is binary cross-entropy
         batch_size = np.prod(feature_vec.shape[:2])
         real = torch.ones(batch_size, 1, device=self.args.device)
 
-        predictions = self.img_gen(feature_vec)
-        
-        # Normalize like the original MNIST images
-        # predictions = (predictions - predictions.min()) / (predictions.max() - predictions.min())
-        # pred_vectors = self.backbone(predictions)
-        # pred_classes = self.backbone.linear(pred_vectors)
-        # tgt_vectors = self.backbone(tgt_images[1:].reshape(-1,1,32,32), True)
+        feature_vec = feature_vec.reshape(-1, feature_vec.shape[2])
 
-        # gen_loss = self.classification_loss(pred_classes, labels)
-        # gen_loss = self.adversarial_loss(self.discriminator(predictions), real)
-        tgt_images = normalize(tgt_images, -1, 1)
-        gen_loss = self.gen_loss(predictions[-2], tgt_images[-2])
+        with torch.no_grad():
+            predictions = self.img_gen(feature_vec)
+
+        tgt_images = tgt_images.reshape(-1, *tgt_images.shape[2:])
+        gen_loss = self.reconstruction_loss(predictions, tgt_images)
+        # gen_loss = self.adversarial_loss(self.discriminator(batched_pred), real)
+        # tgt_images = normalize(tgt_images, -1, 1)
+        # gen_loss = self.gen_loss(predictions[-2], tgt_images[-2])
         log_metric(self, self.phase+'/loss_gen', gen_loss, self.step[self.phase], True)
 
-        if self.phase == 'train':
-            opt.zero_grad()
-            self.manual_backward(gen_loss)
-            opt.step()
+        # if self.phase == 'train':
+        #     opt.zero_grad()
+        #     self.manual_backward(gen_loss)
+        #     opt.step()
 
         return predictions
 
@@ -219,12 +215,6 @@ class YTID(pl.LightningModule):
     def reconstruction_loss(self, outputs, targets):
 
         criterion = nn.MSELoss()
-
-        # targets = targets.reshape(targets.shape[0] * targets.shape[1], -1).to(self.args.device)
-        # outputs = outputs.reshape(targets.shape).to(self.args.device)
-
-        # Normalize output
-        # outputs = (outputs - outputs.min()) / (outputs.max() - outputs.min())
 
         loss = criterion(outputs, targets)
 
@@ -263,23 +253,10 @@ class YTID(pl.LightningModule):
             self.logger.experiment.add_histogram(name, params, self.current_epoch)
 
     def training_epoch_end(self, outputs):
-        # FIXME Change
         if (self.current_epoch + 1) % self.args.log_every_n_steps == 0:
             self.custom_histogram_adder()
 
-            out_image = outputs[-1]['images']
-            gt = outputs[-1]['gt']
-
-            # Log generated images
-            _, pil_img = img_to_PIL(out_image[-2])
-            pil_img = pil_img.resize((256,256))
-            _, pil_gt = img_to_PIL(gt[-2])
-            pil_gt = pil_gt.resize((256,256))
-            wandb.log({self.phase+'/out_image': wandb.Image(pil_img)})
-            wandb.log({self.phase+'/gt': wandb.Image(pil_gt)})
-
-            grid = make_grid(out_image[-2,:6])
-            self.logger.experiment.add_image('out images', grid, self.step[self.phase])
+            log_images(outputs, self.logger.experiment, self.current_epoch, self.phase)
 
 
             # Zero metrics
@@ -293,11 +270,13 @@ class YTID(pl.LightningModule):
             #         }, os.path.join(self.args.weight_dir, 'checkpoint.pt'))
 
 
+    def validation_epoch_end(self, outputs: EPOCH_OUTPUT) -> None:
+        # return super().validation_epoch_end(outputs)
+        if (self.current_epoch + 1) % self.args.log_every_n_steps == 0:
+            self.custom_histogram_adder()
 
-    # def test_step(self, batch, batch_idx):
-    #     self.phase = 'test'
-    #     self.step[self.phase] += 1
-        
+            log_images(outputs, self.logger.experiment, self.current_epoch, self.phase)
+      
 
     def configure_optimizers(self):
         if self.args.opt == 'Adam':

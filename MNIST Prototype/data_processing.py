@@ -1,7 +1,23 @@
 import torch
 from torchvision.utils import make_grid
 import torch.nn.functional as F
-from feature_extractor import ResNet18
+
+
+def accuracy(output, target, topk=(1,)):
+    """Computes the accuracy over the k top predictions for the specified values of k"""
+    with torch.no_grad():
+        maxk = max(topk)
+        batch_size = target.size(0)
+
+        _, pred = output.topk(maxk, 1, True, True)
+        pred = pred.t()
+        correct = pred.eq(target.reshape(1, -1).expand_as(pred))
+
+        res = []
+        for k in topk:
+            correct_k = correct[:k].reshape(-1).float().sum(0, keepdim=True)
+            res.append(correct_k.mul_(100.0 / batch_size))
+        return res
 
 def get_embedding_from_vocab(src, vocab):
     embedding = torch.zeros(1,512)
@@ -24,6 +40,12 @@ def extract_features(backbone, images):
         targets = targets.reshape(seq_len, bs, -1)
     
     return targets
+
+def split_trf_output(out):
+    image_logits = out[:,:,:-4]
+    box_coords = out[:,:,-4:]
+    return image_logits, box_coords
+
 
 def get_target_images(images, TOKENS):
     

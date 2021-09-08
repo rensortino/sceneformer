@@ -1,31 +1,21 @@
-from feature_extractor import ResNet18
 from torchvision.utils import make_grid
 from torch.utils.data import DataLoader, random_split
+from tokens import *
 from torchvision import datasets
 import pytorch_lightning as pl
 import torch
 import torchvision.transforms as T
-from data_processing import extract_features, get_bboxes, get_img_grid, process_labels, get_embedding_from_vocab, build_vocab, wrong_process_labels
-tokens = {
-    'src': {
-        "sos": 14,
-        "eos": 15,
-        "pad": 16
-    },
-    'tgt': {
-        "sos": [0.6, 0.9],
-        "eos": [0.1, 0.4]
-    }
-}
+from data_processing import extract_features, get_bboxes, get_img_grid, process_labels
 
 class GenericDataModule(pl.LightningDataModule):
-    def __init__(self, args, image_size, backbone, data_dir="data", debug=False):
+    def __init__(self, args, image_size, backbone, token_container, data_dir="data", debug=False):
         super(GenericDataModule, self).__init__()
         self.data_dir = data_dir
         self.args = args
         self.image_size = image_size
         self.debug = debug
         self.backbone = backbone
+        self.token_container = token_container
 
     def grid_collate_fn(self, batch):
         # tgt = [<SOS>, [embeddings], <EOS> (, [<PAD>] ) ]
@@ -33,7 +23,7 @@ class GenericDataModule(pl.LightningDataModule):
         data = images.reshape(self.args.seq_len, self.args.seq_bs, self.args.data.n_channels, self.args.data.img_h, self.args.data.img_w)
         labels = labels.reshape(self.args.seq_len, self.args.seq_bs)
 
-        src_seq = process_labels(labels, tokens['src']['sos'], tokens['src']['eos'])
+        src_seq = process_labels(labels, self.token_container.src_token['sos'], self.token_container.src_token['eos'])
 
         for i in range(data.shape[1]):
             img_grid = get_img_grid(data[:,i], self.args.data.n_channels)
@@ -43,10 +33,7 @@ class GenericDataModule(pl.LightningDataModule):
             else:
                 img_grids = torch.cat((img_grids, img_grid), dim=1)
 
-        sos_token = img_grids[0].clone().uniform_(*tokens['tgt']['sos']).unsqueeze(0)
-        eos_token = img_grids[0].clone().uniform_(*tokens['tgt']['eos']).unsqueeze(0)
-
-        tgt_seq = torch.cat((sos_token, img_grids, eos_token))
+        tgt_seq = torch.cat((self.token_container.sos_img_token, img_grids, self.token_container.eos_img_token))
 
         return images, src_seq, tgt_seq
 
@@ -55,7 +42,7 @@ class GenericDataModule(pl.LightningDataModule):
         data = images.reshape(self.args.seq_len, self.args.seq_bs, self.args.data.n_channels, self.args.data.img_h, self.args.data.img_w)
         labels = labels.reshape(self.args.seq_len, self.args.seq_bs)
 
-        src_seq = process_labels(labels, tokens['src']['sos'], tokens['src']['eos'])
+        src_seq = process_labels(labels, self.token_container.src_token['sos'], self.token_container.src_token['eos'])
 
         for i in range(data.shape[1]):
             img_w_boxes = get_bboxes(data[:,i])
@@ -65,20 +52,15 @@ class GenericDataModule(pl.LightningDataModule):
             else:
                 boxes = torch.cat((boxes, img_w_boxes), dim=1)
 
-        sos_img_token = data[0].clone().uniform_(*tokens['tgt']['sos']).unsqueeze(0)
-        eos_img_token = data[0].clone().uniform_(*tokens['tgt']['eos']).unsqueeze(0)
-
-        sos_box_token = torch.tensor([0,0,0,0]).repeat(1,self.args.seq_bs,1)
-        eos_box_token = torch.tensor([1,1,0,0]).repeat(1,self.args.seq_bs,1)
-
-        tgt_seq = torch.cat((sos_img_token, data, eos_img_token))
-        tgt_boxes = torch.cat((sos_box_token, boxes, eos_box_token))
+        tgt_seq = torch.cat((self.token_container.sos_img_token, data, self.token_container.eos_img_token))
+        tgt_boxes = torch.cat((self.token_container.sos_box_token, boxes, self.token_container.eos_box_token))
 
         return images, src_seq, tgt_seq, tgt_boxes
 
     def get_example_batch(self):
-        src_seq, tgt_images = next(iter(DataLoader(self.train_dataset, batch_size=self.args.batch_size, drop_last=True, collate_fn=self.grid_collate_fn)))[1:]
-        tgt_seq = extract_features(self.backbone, tgt_images)
+        src_seq, tgt_images, tgt_boxes = next(iter(DataLoader(self.train_dataset, batch_size=self.args.batch_size, drop_last=True, collate_fn=self.bbox_collate_fn)))[1:]
+        tgt_feats = extract_features(self.backbone, tgt_images).cpu()
+        tgt_seq = torch.cat((tgt_feats, tgt_boxes), dim=2)
         return src_seq, tgt_seq
 
     def train_dataloader(self):
@@ -95,8 +77,8 @@ class GenericDataModule(pl.LightningDataModule):
 
 class MNISTDataModule(GenericDataModule):
 
-    def __init__(self, args, image_size, backbone, data_dir="data", debug=False):
-        super(MNISTDataModule, self).__init__(args, image_size, backbone, data_dir, debug)
+    def __init__(self, args, image_size, backbone, token_container, data_dir="data", debug=False):
+        super(MNISTDataModule, self).__init__(args, image_size, backbone, token_container, data_dir, debug)
 
     def prepare_data(self):
         datasets.MNIST(self.data_dir, train=True, download=True)
@@ -121,8 +103,8 @@ class MNISTDataModule(GenericDataModule):
 
 
 class CIFAR10DataModule(GenericDataModule):
-    def __init__(self, args, backbone, data_dir="data", debug=False):
-        super(CIFAR10DataModule, self).__init__(args, 32, backbone, data_dir, debug)
+    def __init__(self, args, backbone, token_container, data_dir="data", debug=False):
+        super(CIFAR10DataModule, self).__init__(args, 32, backbone, token_container, data_dir, debug)
         self.mean = (0.4914, 0.4822, 0.4465)
         self.std = (0.2471, 0.2435, 0.2616)
 
