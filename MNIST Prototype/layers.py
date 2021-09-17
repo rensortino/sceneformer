@@ -100,16 +100,6 @@ class ImageTransformer(nn.Module):
 
         self.data_options = data_options
 
-        # Transformer
-        # self.transformer = nn.Transformer(
-        #     emb_size,
-        #     n_heads,
-        #     n_enc_layers,
-        #     n_dec_layers,
-        #     ff_dim,
-        #     dropout,
-        # )
-
         norm = LayerNorm(emb_size)
 
         # Encoder
@@ -134,9 +124,16 @@ class ImageTransformer(nn.Module):
         # self.dim_reduction = nn.Linear(8192, self.emb_size)
         # self.tgt_embedding = torch.nn.Embedding(tgt_vocab_size, emb_size).to(device)
         self.tgt_embedding = feature_extractor
+        # TODO Parametrize
+        self.box_embedding = torch.nn.Linear(4, 256)
+        # TODO Parametrize
+        self.box_generator = torch.nn.Linear(256, 4)
+        # TODO Parametrize
+        self.feature_generator = torch.nn.Linear(256, 256)
 
         # emb_size includes both classes (12 = 10 + 2) and bbox coordinates (4)
-        self.fc = nn.Linear(emb_size - 4, tgt_vocab_size).to(device)
+        # TODO Parametrize
+        self.fc = nn.Linear(256, tgt_vocab_size).to(device)
         # self.fc_same_dim = LinearSameDim(emb_size).to(device)
 
         self.init_weights()
@@ -187,7 +184,7 @@ class ImageTransformer(nn.Module):
                                         .type_as(src))
 
             probs_and_boxes = self.fc(out)
-            probs, boxes = split_trf_output(probs_and_boxes)
+            probs, boxes = split_list(probs_and_boxes)
             _, classes = probs.max(dim=2)
             print(classes)
 
@@ -211,6 +208,10 @@ class ImageTransformer(nn.Module):
         src = self.pos_enc(src)
 
         seq_len, bs = targets.shape[0], targets.shape[1]
+
+        features, boxes = split_list(targets, 4)
+        boxes = self.box_embedding(boxes)
+        targets = torch.cat((features, boxes), dim=2)
         
         targets = self.pos_enc(targets)
 
@@ -220,7 +221,12 @@ class ImageTransformer(nn.Module):
         memory = self.encode(src)
         out = self.decode(memory, None, targets, tgt_mask)
 
-        features, boxes = split_trf_output(out)
+        features, boxes = split_list(out, 256)
+
+        # Remove negative values
+        boxes = nn.functional.sigmoid(boxes)
+        boxes = self.box_generator(boxes)
+        # features = self.feature_generator(features)
 
         logits = self.get_probs(features)
 

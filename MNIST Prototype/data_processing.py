@@ -1,6 +1,7 @@
 import torch
 from torchvision.utils import make_grid
 import torch.nn.functional as F
+from einops import rearrange
 
 
 def accuracy(output, target, topk=(1,)):
@@ -17,7 +18,11 @@ def accuracy(output, target, topk=(1,)):
         for k in topk:
             correct_k = correct[:k].reshape(-1).float().sum(0, keepdim=True)
             res.append(correct_k.mul_(100.0 / batch_size))
-        return res
+
+        if len(topk) == 1:
+            return res[0].item()
+        else:
+            return res
 
 def get_embedding_from_vocab(src, vocab):
     embedding = torch.zeros(1,512)
@@ -33,18 +38,18 @@ def normalize(x, low, up):
     return (up - low) * (x - x.min()) / (x.max() - x.min()) + low
 
 def extract_features(backbone, images):
-    seq_len, bs = images.shape[:2]
-    images = images.reshape(-1, *list(images.shape[2:]))
+    seq_len = images.shape[0]
+    images = rearrange(images, 'seq b c h w -> (seq b) c h w' )
     with torch.no_grad():
         targets = backbone(images.cuda())
-        targets = targets.reshape(seq_len, bs, -1)
+        targets = rearrange(targets, '(seq b) emb -> seq b emb', seq=seq_len)
     
     return targets
 
-def split_trf_output(out):
-    image_logits = out[:,:,:-4]
-    box_coords = out[:,:,-4:]
-    return image_logits, box_coords
+def split_list(x, idx):
+    y = x[:,:,:-idx]
+    z = x[:,:,-idx:]
+    return y, z
 
 
 def get_target_images(images, TOKENS):

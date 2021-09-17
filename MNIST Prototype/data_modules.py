@@ -4,6 +4,7 @@ from tokens import *
 from torchvision import datasets
 import pytorch_lightning as pl
 import torch
+from einops import rearrange
 import torchvision.transforms as T
 from data_processing import extract_features, get_bboxes, get_img_grid, process_labels
 
@@ -20,8 +21,8 @@ class GenericDataModule(pl.LightningDataModule):
     def grid_collate_fn(self, batch):
         # tgt = [<SOS>, [embeddings], <EOS> (, [<PAD>] ) ]
         images, labels = torch.utils.data._utils.collate.default_collate(batch)
-        data = images.reshape(self.args.seq_len, self.args.seq_bs, self.args.data.n_channels, self.args.data.img_h, self.args.data.img_w)
-        labels = labels.reshape(self.args.seq_len, self.args.seq_bs)
+        data = einops.rearrange(images, '(s b) c h w -> s b c h w', s=self.args.seq_len)
+        labels = einops.rearrange(labels, '(s b) -> s b', s=self.args.seq_len)
 
         src_seq = process_labels(labels, self.token_container.src_token['sos'], self.token_container.src_token['eos'])
 
@@ -39,8 +40,31 @@ class GenericDataModule(pl.LightningDataModule):
 
     def bbox_collate_fn(self, batch):
         images, labels = torch.utils.data._utils.collate.default_collate(batch)
-        data = images.reshape(self.args.seq_len, self.args.seq_bs, self.args.data.n_channels, self.args.data.img_h, self.args.data.img_w)
-        labels = labels.reshape(self.args.seq_len, self.args.seq_bs)
+        data = rearrange(images, '(s b) c h w -> s b c h w', s=self.args.seq_len)
+        labels = rearrange(labels, '(s b) -> s b', s=self.args.seq_len)
+
+        src_seq = process_labels(labels, self.token_container.src_token['sos'], self.token_container.src_token['eos'])
+
+        for i in range(data.shape[1]):
+            img_w_boxes = get_bboxes(data[:,i])
+            img_w_boxes = img_w_boxes.unsqueeze(1)
+            if i == 0:
+                boxes = img_w_boxes
+            else:
+                boxes = torch.cat((boxes, img_w_boxes), dim=1)
+
+        tgt_seq = torch.cat((self.token_container.sos_img_token, data, self.token_container.eos_img_token))
+        tgt_boxes = torch.cat((self.token_container.sos_box_token, boxes, self.token_container.eos_box_token))
+
+        return images, src_seq, tgt_seq, tgt_boxes
+    
+    def one_img_collate_fn(self, batch):
+        batch = torch.load('one_img_cifar.pt')
+        images, labels = torch.utils.data._utils.collate.default_collate(batch)
+        data = rearrange(images, '(s b) c h w -> s b c h w', s=self.args.seq_len)
+        labels = rearrange(labels, '(s b) -> s b', s=self.args.seq_len)
+        # data = images.reshape(self.args.seq_len, self.args.seq_bs, self.args.data.n_channels, self.args.data.img_h, self.args.data.img_w)
+        # labels = labels.reshape(self.args.seq_len, self.args.seq_bs)
 
         src_seq = process_labels(labels, self.token_container.src_token['sos'], self.token_container.src_token['eos'])
 
@@ -58,21 +82,21 @@ class GenericDataModule(pl.LightningDataModule):
         return images, src_seq, tgt_seq, tgt_boxes
 
     def get_example_batch(self):
-        src_seq, tgt_images, tgt_boxes = next(iter(DataLoader(self.train_dataset, batch_size=self.args.batch_size, drop_last=True, collate_fn=self.bbox_collate_fn)))[1:]
+        src_seq, tgt_images, tgt_boxes = next(iter(DataLoader(self.train_dataset, batch_size=self.args.batch_size, drop_last=True, collate_fn=self.one_img_collate_fn)))[1:]
         tgt_feats = extract_features(self.backbone, tgt_images).cpu()
         tgt_seq = torch.cat((tgt_feats, tgt_boxes), dim=2)
         return src_seq, tgt_seq
 
     def train_dataloader(self):
-        return DataLoader(self.train_dataset, batch_size=self.args.batch_size, num_workers=self.args.num_workers, shuffle=True, persistent_workers=self.args.persistent_workers, drop_last=True, collate_fn=self.bbox_collate_fn)
+        return DataLoader(self.train_dataset, batch_size=self.args.batch_size, num_workers=self.args.num_workers, shuffle=True, persistent_workers=self.args.persistent_workers, drop_last=True, collate_fn=self.one_img_collate_fn)
 
     def val_dataloader(self):
         if not self.debug:
-            return DataLoader(self.val_dataset, batch_size=self.args.batch_size, num_workers=self.args.num_workers, shuffle=False, drop_last=True, collate_fn=self.bbox_collate_fn)
+            return DataLoader(self.val_dataset, batch_size=self.args.batch_size, num_workers=self.args.num_workers, shuffle=False, drop_last=True, collate_fn=self.one_img_collate_fn)
 
     def test_dataloader(self):
         if not self.debug:
-            return DataLoader(self.test_dataset, batch_size=self.args.batch_size, num_workers=self.args.num_workers, shuffle=False, drop_last=True, collate_fn=self.bbox_collate_fn)
+            return DataLoader(self.test_dataset, batch_size=self.args.batch_size, num_workers=self.args.num_workers, shuffle=False, drop_last=True, collate_fn=self.one_img_collate_fn)
 
 
 class MNISTDataModule(GenericDataModule):

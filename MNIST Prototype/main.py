@@ -1,5 +1,3 @@
-from datetime import datetime
-
 import random
 from tokens import TokenContainer
 from resnet import resnet18_encoder, resnet18_decoder
@@ -13,7 +11,7 @@ from ytid import YTID
 from layers import *
 from attrdict import AttrDict
 import argparse
-from log_utils import Logging
+from log_utils import Logger
 from layers import ImageGenerator, Discriminator
 import os
 
@@ -42,7 +40,7 @@ def get_args_parser():
     parser.add_argument('--t_lr', default=1e-4, type=float)
     parser.add_argument('--g_lr', default=1e-4, type=float)
     parser.add_argument('--d_lr', default=1e-4, type=float)
-    parser.add_argument('--opt', default="Adam", type=str)
+    parser.add_argument('--opt', default="adam", choices=['adam', 'sgd'], type=str)
     parser.add_argument('--lr_backbone', default=1e-5, type=float)
     parser.add_argument('--lr_drop', default=200, type=int)
     parser.add_argument('--clip_max_norm', default=0.1, type=float,
@@ -84,22 +82,16 @@ def get_args_parser():
                         help="Directory where data is stored")
     parser.add_argument('--validation_split', default=0.1, type=float,
                         help="Fraction of data to put in validation")
-    parser.add_argument('--num_workers', default=16, type=int)
+    parser.add_argument('--num_workers', default=8, type=int)
     parser.add_argument('--persistent_workers', action='store_true')
-
-    # * Data parameters # TODO Replace with config file
-    # parser.add_argument('--n_classes', default=10, type=int,
-    #                     help="Number of classes in the dataset")
-    # parser.add_argument('--img_w', default=28, type=int,
-    #                     help="Image width")
-    # parser.add_argument('--img_h', default=28, type=int,
-    #                     help="Image height")
-    # parser.add_argument('--n_channels', default=1, type=str,
-    #                     help="Number of channels of the images")
 
     # * Other parameters
     parser.add_argument('--output_dir', default='output',
                         help='path where to save, empty for no saving')
+    parser.add_argument('--subfolder', default='',
+                        help='descriptive subfolder of run')
+    parser.add_argument('--suffix', default='',
+                        help='Additional information to add to dir name')
     parser.add_argument('--weight_dir', default='weights',
                         help='path where to save weigths, empty for no saving')
     parser.add_argument('--tb_dir', default='logs',
@@ -134,6 +126,12 @@ def main(args):
     assert args.emb_size % args.n_heads == 0, "Embedding size not divisible by number of heads"
     assert args.batch_size % args.seq_len == 0, "Batch size not divisible by sequence length"
 
+    if args.debug:
+        args.subfolder = 'debug'
+    if not args.subfolder:
+        args.subfolder = input('Name your run')
+
+
     os.makedirs(args.output_dir, exist_ok=True)
     os.makedirs(args.weight_dir, exist_ok=True)
     
@@ -142,7 +140,7 @@ def main(args):
     # image_size = (args.data.img_w * int(math.sqrt(args.seq_len)), args.data.img_h * int(math.sqrt(args.seq_len)))
     image_size = (args.data.img_w, args.data.img_h)
 
-    ae = AE(input_height=32).from_pretrained('cifar10-resnet18')
+    ae = AE(input_height=32, latent_dim=512).from_pretrained('cifar10-resnet18')
 
     # backbone = resnet18_encoder(True, True, args.data.backbone_ckpt, num_classes=args.data.n_classes)
     backbone = nn.Sequential(
@@ -162,58 +160,9 @@ def main(args):
     elif args.data_module == "cifar":
         data_module = CIFAR10DataModule(args, backbone, token_container, debug=args.debug)
 
-    # Logging
-    
-    current_date = datetime.now()
-    formatted_date = f'{current_date.year}-{current_date.month}-{current_date.day}-{current_date.hour}h{current_date.minute}'
-
-    wandb.login()
-
-    hparams = dict(
-        name = args.data_module,
-        ff_dim = args.ff_dim, # the dimension of the feedforward network model in nn.TransformerEncoder
-        enc_layers = args.n_enc_layers, # the number of nn.TransformerEncoderLayer in nn.TransformerEncoder
-        dec_layers = args.n_dec_layers, # the number of nn.TransformerDecoderLayer in nn.TransformerDecoder
-        nheads = args.n_heads, # the number of heads in the multiheadattention models
-        dropout = args.dropout, # the dropout value
-        seq_len = args.seq_len,
-        seq_bs = args.seq_bs,
-        t_lr = args.t_lr,
-        g_lr = args.g_lr,
-        d_lr = args.d_lr,
-        emb_size = args.emb_size,
-        img_size = args.data.img_h,
-        one_batch = args.overfit_batches,
-        ngf = args.ngf,
-        ndf = args.ndf
-    )
-
-    if args.debug:
-        run_mode = "disabled"
-        run_name = "Test"
-        run_notes = "Testing..."
-        
-    else:
-        run_mode = "online"
-        run_name = input("Name your run: ")
-        run_notes = input("Describe your run: ")
-
-    
-
-    wandb.init(
-        config=hparams,
-        notes=run_notes,
-        name=run_name,
-        mode=run_mode
-    )
-
-    tb_logger = pl.loggers.TensorBoardLogger(
-        save_dir=args.tb_dir,
-        name=run_name,
-        version=formatted_date,
-        log_graph=True,
-        # default_hp_metric=False,
-    )
+    # Logger
+    # TODO Fix names 
+    logger = Logger(args)
 
     # Modules Instances
 
@@ -247,14 +196,13 @@ def main(args):
         limit_val_batches = 0.0
         batches_fraction = math.ceil(args.batch_size / len(data_module.train_dataset))
 
-    model = YTID(hparams, img_transformer, img_gen, disc, backbone, token_container, example_input, args).to(args.device)
+    model = YTID(img_transformer, img_gen, disc, backbone, logger, token_container, example_input, args).to(args.device)
 
     # Define trainer module
-    
 
     trainer = pl.Trainer(
         gpus=args.n_gpu,
-        logger=tb_logger,
+        # logger=logger.writer,
         # default_hp_metric=False,
         # fast_dev_run=True,
         overfit_batches=batches_fraction,
@@ -265,9 +213,6 @@ def main(args):
         progress_bar_refresh_rate=20,
         max_epochs=args.epochs,
         #profiler=True, # This is very time consuming
-        callbacks=[
-            Logging(tb_logger),
-        ]
     )
 
     # Load weights
